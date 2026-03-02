@@ -46,6 +46,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withAndroidCleartextNetwork",
       [
         "expo-video",
         {
