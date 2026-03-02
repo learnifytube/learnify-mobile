@@ -46,7 +46,12 @@
     },
     "plugins": [
       "expo-router",
-      "expo-video",
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true
+        }
+      ],
       "expo-sqlite",
       [
         "@sentry/react-native/expo",

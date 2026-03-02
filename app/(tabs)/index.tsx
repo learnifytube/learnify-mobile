@@ -86,7 +86,6 @@ export default function HomeScreen() {
     clearVideoSelection,
     addToFavorites,
     removeFromFavorites,
-    reset: resetSyncStore,
   } = useSyncStore();
 
   const startPlaylist = usePlaybackStore((s) => s.startPlaylist);
@@ -138,49 +137,90 @@ export default function HomeScreen() {
     fetchMyLists,
   ]);
 
-  // Reset sync store when disconnecting
+  // Clear pending actions when disconnected
   useEffect(() => {
     if (!serverUrl) {
-      resetSyncStore();
       setPendingVideoIds(new Set());
+      clearVideoSelection();
     }
-  }, [serverUrl, resetSyncStore]);
+  }, [serverUrl, clearVideoSelection]);
+
+  const hasCachedData =
+    channels.length > 0 ||
+    playlists.length > 0 ||
+    myLists.length > 0 ||
+    subscriptionVideos.length > 0;
+
+  const showOfflineAlert = useCallback(() => {
+    Alert.alert(
+      "Offline mode",
+      "Reconnect to your desktop app to refresh or sync new videos."
+    );
+  }, []);
 
   const handleRefreshChannels = useCallback(() => {
-    if (serverUrl) fetchChannels(serverUrl);
-  }, [serverUrl, fetchChannels]);
+    if (serverUrl) {
+      fetchChannels(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchChannels, showOfflineAlert]);
 
   const handleRefreshPlaylists = useCallback(() => {
-    if (serverUrl) fetchPlaylists(serverUrl);
-  }, [serverUrl, fetchPlaylists]);
+    if (serverUrl) {
+      fetchPlaylists(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchPlaylists, showOfflineAlert]);
 
   const handleRefreshSubscriptions = useCallback(() => {
-    if (serverUrl) fetchSubscriptions(serverUrl);
-  }, [serverUrl, fetchSubscriptions]);
+    if (serverUrl) {
+      fetchSubscriptions(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchSubscriptions, showOfflineAlert]);
 
   const handleRefreshMyLists = useCallback(() => {
-    if (serverUrl) fetchMyLists(serverUrl);
-  }, [serverUrl, fetchMyLists]);
+    if (serverUrl) {
+      fetchMyLists(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchMyLists, showOfflineAlert]);
 
   const handleChannelPress = useCallback(
     (channel: RemoteChannel) => {
-      if (serverUrl) fetchChannelVideos(serverUrl, channel);
+      if (serverUrl) {
+        fetchChannelVideos(serverUrl, channel);
+        return;
+      }
+      selectChannel(channel);
     },
-    [serverUrl, fetchChannelVideos]
+    [serverUrl, fetchChannelVideos, selectChannel]
   );
 
   const handlePlaylistPress = useCallback(
     (playlist: RemotePlaylist) => {
-      if (serverUrl) fetchPlaylistVideos(serverUrl, playlist);
+      if (serverUrl) {
+        fetchPlaylistVideos(serverUrl, playlist);
+        return;
+      }
+      selectPlaylist(playlist);
     },
-    [serverUrl, fetchPlaylistVideos]
+    [serverUrl, fetchPlaylistVideos, selectPlaylist]
   );
 
   const handleMyListPress = useCallback(
     (myList: RemoteMyList) => {
-      if (serverUrl) fetchMyListVideos(serverUrl, myList);
+      if (serverUrl) {
+        fetchMyListVideos(serverUrl, myList);
+        return;
+      }
+      selectMyList(myList);
     },
-    [serverUrl, fetchMyListVideos]
+    [serverUrl, fetchMyListVideos, selectMyList]
   );
 
   const handleBackPress = useCallback(() => {
@@ -247,10 +287,16 @@ export default function HomeScreen() {
 
   const playSubscriptionVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
       const localPath =
         getVideoLocalPath(video.id) ??
         libraryVideos.find((v) => v.id === video.id)?.localPath;
+      if (!serverUrl && !localPath) {
+        Alert.alert(
+          "Offline mode",
+          "This video is not downloaded on mobile yet."
+        );
+        return;
+      }
 
       const streamingVideo: StreamingVideo = {
         id: video.id,
@@ -261,7 +307,13 @@ export default function HomeScreen() {
         localPath: localPath ?? undefined,
       };
 
-      startPlaylist("subscriptions", "Subscriptions", [streamingVideo], 0, serverUrl);
+      startPlaylist(
+        "subscriptions",
+        "Subscriptions",
+        [streamingVideo],
+        0,
+        serverUrl ?? undefined
+      );
       router.push(`/player/${video.id}`);
     },
     [libraryVideos, serverUrl, startPlaylist, router]
@@ -269,16 +321,21 @@ export default function HomeScreen() {
 
   const handleSubscriptionVideoPress = useCallback(
     async (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
+      if (videoExistsLocally(video.id)) {
+        playSubscriptionVideo(video);
+        return;
+      }
+      if (!serverUrl) {
+        Alert.alert(
+          "Offline mode",
+          "Reconnect to desktop to stream or sync this video."
+        );
+        return;
+      }
       if (pendingVideoIds.has(video.id)) return;
 
       setPending(video.id, true);
       try {
-        if (videoExistsLocally(video.id)) {
-          playSubscriptionVideo(video);
-          return;
-        }
-
         const response = await api.requestServerDownload(serverUrl, { videoId: video.id });
         if (!response.success && !response.status) {
           throw new Error(response.message || "Server refused download request");
@@ -318,10 +375,16 @@ export default function HomeScreen() {
   // Play a single video (streaming or local)
   const handlePlayVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
-
-      // Check if video is synced locally
-      const localVideo = libraryVideos.find((v) => v.id === video.id);
+      const localPath =
+        getVideoLocalPath(video.id) ??
+        libraryVideos.find((v) => v.id === video.id)?.localPath;
+      if (!serverUrl && !localPath) {
+        Alert.alert(
+          "Offline mode",
+          "This video is not downloaded on mobile yet."
+        );
+        return;
+      }
 
       // Create streaming video object
       const streamingVideo: StreamingVideo = {
@@ -330,7 +393,7 @@ export default function HomeScreen() {
         channelTitle: video.channelTitle,
         duration: video.duration,
         thumbnailUrl: video.thumbnailUrl ?? undefined,
-        localPath: localVideo?.localPath,
+        localPath: localPath ?? undefined,
       };
 
       // Determine the context title
@@ -360,32 +423,46 @@ export default function HomeScreen() {
       // Convert to StreamingVideo array
       const playlistStreamingVideos: StreamingVideo[] = currentVideos.map(
         (v) => {
-          const local = libraryVideos.find((lv) => lv.id === v.id);
+          const local =
+            getVideoLocalPath(v.id) ??
+            libraryVideos.find((lv) => lv.id === v.id)?.localPath;
           return {
             id: v.id,
             title: v.title,
             channelTitle: v.channelTitle,
             duration: v.duration,
             thumbnailUrl: v.thumbnailUrl ?? undefined,
-            localPath: local?.localPath,
+            localPath: local ?? undefined,
           };
         }
       );
+      const playablePlaylistVideos = serverUrl
+        ? playlistStreamingVideos
+        : playlistStreamingVideos.filter((v) => !!v.localPath);
 
       // Find index of current video
-      const startIndex = playlistStreamingVideos.findIndex(
+      const startIndex = playablePlaylistVideos.findIndex(
         (v) => v.id === video.id
       );
+      const fallbackVideos =
+        serverUrl || streamingVideo.localPath ? [streamingVideo] : [];
+      const videosToPlay =
+        playablePlaylistVideos.length > 0 ? playablePlaylistVideos : fallbackVideos;
 
-      // Start playlist with server URL for streaming
+      if (videosToPlay.length === 0) {
+        Alert.alert(
+          "Offline mode",
+          "No playable video source is available."
+        );
+        return;
+      }
+
       startPlaylist(
         contextId,
         contextTitle,
-        playlistStreamingVideos.length > 0
-          ? playlistStreamingVideos
-          : [streamingVideo],
+        videosToPlay,
         startIndex >= 0 ? startIndex : 0,
-        serverUrl
+        serverUrl ?? undefined
       );
 
       router.push(`/player/${video.id}`);
@@ -427,8 +504,6 @@ export default function HomeScreen() {
   );
 
   const handlePlayAll = useCallback(() => {
-    if (!serverUrl) return;
-
     // Determine current context and videos
     let contextTitle = "";
     let contextId = "";
@@ -452,30 +527,58 @@ export default function HomeScreen() {
       currentVideos = subscriptionVideos;
     }
 
-    // Get playable videos (downloaded on server)
-    const playableVideos = currentVideos.filter(
-      (v) => v.downloadStatus === "completed"
-    );
+    const playableVideos = currentVideos.filter((v) => {
+      if (serverUrl) {
+        return v.downloadStatus === "completed";
+      }
+      return syncedVideoIds.has(v.id);
+    });
 
-    if (playableVideos.length === 0) return;
+    if (playableVideos.length === 0) {
+      Alert.alert(
+        "Offline mode",
+        "No downloaded videos are available to play."
+      );
+      return;
+    }
 
     // Convert to StreamingVideo array
     const streamingVideos: StreamingVideo[] = playableVideos.map((v) => {
-      const localVideo = libraryVideos.find((lv) => lv.id === v.id);
+      const localPath =
+        getVideoLocalPath(v.id) ??
+        libraryVideos.find((lv) => lv.id === v.id)?.localPath;
       return {
         id: v.id,
         title: v.title,
         channelTitle: v.channelTitle,
         duration: v.duration,
         thumbnailUrl: v.thumbnailUrl ?? undefined,
-        localPath: localVideo?.localPath,
+        localPath: localPath ?? undefined,
       };
     });
+    const videosToPlay = serverUrl
+      ? streamingVideos
+      : streamingVideos.filter((v) => !!v.localPath);
 
-    startPlaylist(contextId, contextTitle, streamingVideos, 0, serverUrl);
-    router.push(`/player/${streamingVideos[0].id}`);
+    if (videosToPlay.length === 0) {
+      Alert.alert(
+        "Offline mode",
+        "No downloaded videos are available to play."
+      );
+      return;
+    }
+
+    startPlaylist(
+      contextId,
+      contextTitle,
+      videosToPlay,
+      0,
+      serverUrl ?? undefined
+    );
+    router.push(`/player/${videosToPlay[0].id}`);
   }, [
     serverUrl,
+    syncedVideoIds,
     selectedPlaylist,
     selectedChannel,
     selectedMyList,
@@ -536,8 +639,8 @@ export default function HomeScreen() {
     clearVideoSelection,
   ]);
 
-  // Not connected - show connect prompt
-  if (!isConnected) {
+  // Not connected and no cache - show connect prompt
+  if (!isConnected && !hasCachedData) {
     return (
       <SafeAreaView style={styles.container} edges={["bottom"]}>
         <View style={styles.emptyState}>
@@ -580,17 +683,19 @@ export default function HomeScreen() {
     const availableVideos = currentVideos.filter(
       (v) => v.downloadStatus === "completed"
     );
-    const syncableCount = availableVideos.filter(
-      (v) => !syncedVideoIds.has(v.id)
-    ).length;
+    const syncableCount = serverUrl
+      ? availableVideos.filter((v) => !syncedVideoIds.has(v.id)).length
+      : 0;
     const savedCount = availableVideos.filter((v) =>
       syncedVideoIds.has(v.id)
     ).length;
     const totalAvailable = availableVideos.length;
     const isFullySaved = savedCount === totalAvailable && totalAvailable > 0;
 
-    // Count videos that are downloaded on server (playable via streaming or local)
-    const playableCount = totalAvailable;
+    const localPlayableCount = currentVideos.filter((v) =>
+      syncedVideoIds.has(v.id)
+    ).length;
+    const playableCount = serverUrl ? totalAvailable : localPlayableCount;
 
     const handleSavePlaylistOffline = () => {
       // Determine playlist info based on what's selected
@@ -633,6 +738,10 @@ export default function HomeScreen() {
         savePlaylist(playlistId, playlistTitle, playlistType, sourceId, thumbnailUrl, videoInfos);
       }
 
+      if (!serverUrl) {
+        return;
+      }
+
       // Queue downloads for videos not yet synced
       for (const video of availableVideos) {
         if (!syncedVideoIds.has(video.id)) {
@@ -664,7 +773,7 @@ export default function HomeScreen() {
             </Text>
           </View>
           {/* Save Offline Button */}
-          {currentVideos.length > 0 && (
+          {currentVideos.length > 0 && serverUrl && (
             <Pressable
               style={[
                 styles.saveOfflineButton,
@@ -756,6 +865,7 @@ export default function HomeScreen() {
                 isSyncedToMobile={syncedVideoIds.has(item.id)}
                 onPress={() => {
                   if (
+                    serverUrl &&
                     item.downloadStatus === "completed" &&
                     !syncedVideoIds.has(item.id)
                   ) {
@@ -763,12 +873,14 @@ export default function HomeScreen() {
                   }
                 }}
                 onPlayPress={
-                  item.downloadStatus === "completed"
+                  item.downloadStatus === "completed" || syncedVideoIds.has(item.id)
                     ? () => handlePlayVideo(item)
                     : undefined
                 }
                 onSyncPress={
-                  item.downloadStatus === "completed" && !syncedVideoIds.has(item.id)
+                  serverUrl &&
+                  item.downloadStatus === "completed" &&
+                  !syncedVideoIds.has(item.id)
                     ? () => handleSyncVideo(item)
                     : undefined
                 }
@@ -785,15 +897,27 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       {/* Connection header */}
-      <View style={styles.connectionHeader}>
+      <View
+        style={[
+          styles.connectionHeader,
+          !isConnected && styles.connectionHeaderOffline,
+        ]}
+      >
         <View style={styles.connectionInfo}>
-          <View style={styles.connectionDot} />
+          <View
+            style={[
+              styles.connectionDot,
+              !isConnected && styles.connectionDotOffline,
+            ]}
+          />
           <Text style={styles.connectionText}>
-            Connected to {serverName || "Desktop"}
+            {isConnected
+              ? `Connected to ${serverName || "Desktop"}`
+              : "Offline mode (showing cached data)"}
           </Text>
         </View>
         <View style={styles.headerActions}>
-          {(activeDownloads.length > 0 || queuedDownloads.length > 0) && (
+          {isConnected && (activeDownloads.length > 0 || queuedDownloads.length > 0) && (
             <View style={styles.downloadStatus}>
               {activeDownloads.length > 0 && (
                 <Text style={styles.downloadStatusText}>
@@ -808,9 +932,17 @@ export default function HomeScreen() {
               )}
             </View>
           )}
-          <Pressable style={styles.disconnectButton} onPress={disconnect}>
-            <Text style={styles.disconnectButtonText}>Disconnect</Text>
-          </Pressable>
+          {isConnected ? (
+            <Pressable style={styles.disconnectButton} onPress={disconnect}>
+              <Text style={styles.disconnectButtonText}>Disconnect</Text>
+            </Pressable>
+          ) : (
+            <Link href="/connect" asChild>
+              <Pressable style={styles.reconnectButton}>
+                <Text style={styles.reconnectButtonText}>Reconnect</Text>
+              </Pressable>
+            </Link>
+          )}
         </View>
       </View>
 
@@ -836,7 +968,7 @@ export default function HomeScreen() {
           serverUrl={serverUrl ?? undefined}
           favoritePlaylistIds={favoritePlaylistIds}
           onPlaylistPress={handlePlaylistPress}
-          onSavePress={handlePlaylistSavePress}
+          onSavePress={serverUrl ? handlePlaylistSavePress : undefined}
           onRefresh={handleRefreshPlaylists}
         />
       )}
@@ -964,6 +1096,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  connectionHeaderOffline: {
+    backgroundColor: colors.background,
+  },
   connectionInfo: {
     flexDirection: "row",
     alignItems: "center",
@@ -975,6 +1110,9 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.success,
     marginRight: spacing.sm,
+  },
+  connectionDotOffline: {
+    backgroundColor: "#f59e0b",
   },
   connectionText: {
     color: colors.foreground,
@@ -1008,6 +1146,17 @@ const styles = StyleSheet.create({
   },
   disconnectButtonText: {
     color: colors.foreground,
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+  },
+  reconnectButton: {
+    paddingHorizontal: spacing.sm + 4,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+  },
+  reconnectButtonText: {
+    color: colors.primaryForeground,
     fontSize: fontSize.sm,
     fontWeight: fontWeight.medium,
   },

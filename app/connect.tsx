@@ -64,6 +64,27 @@ function buildManualConnectUrls(input: string): string[] {
   }
 }
 
+function normalizeDiscoveredHost(host: string): string {
+  const trimmed = host.trim().replace(/%.+$/, "");
+  // Wrap IPv6 literals in brackets for URL formatting.
+  if (trimmed.includes(":") && !trimmed.startsWith("[")) {
+    return `[${trimmed}]`;
+  }
+  return trimmed;
+}
+
+function buildDiscoveredConnectUrls(device: DiscoveredPeer): string[] {
+  const host = normalizeDiscoveredHost(device.host);
+  if (!host) return [];
+
+  const ports = [device.port, DEFAULT_SYNC_PORT, LEGACY_SYNC_PORT].filter(
+    (value, index, arr): value is number =>
+      Number.isInteger(value) && value > 0 && arr.indexOf(value) === index
+  );
+
+  return ports.map((port) => `http://${host}:${port}`);
+}
+
 export default function ConnectScreen() {
   const [ipAddress, setIpAddress] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
@@ -110,31 +131,45 @@ export default function ConnectScreen() {
   }, []);
 
   const handleConnectToDevice = async (device: DiscoveredPeer) => {
-    const url = `http://${device.host}:${device.port}`;
-    console.log("[Connect] Connecting to discovered device:", device.name, url);
+    const candidateUrls = buildDiscoveredConnectUrls(device);
+    console.log(
+      "[Connect] Connecting to discovered device:",
+      device.name,
+      candidateUrls
+    );
     setIsConnecting(true);
+    let lastError: unknown = null;
 
     try {
-      console.log("[Connect] Fetching server info...");
-      const info = await api.getInfo(url);
-      console.log("[Connect] Connected to:", info.name, "Videos:", info.videoCount);
+      for (const url of candidateUrls) {
+        try {
+          console.log("[Connect] Trying discovered URL:", url);
+          const info = await api.getInfo(url);
+          console.log("[Connect] Connected to:", info.name, "via", url);
 
-      setServerUrl(url);
-      console.log("[Connect] Fetching video list...");
-      const videosResponse = await api.getVideos(url);
-      console.log("[Connect] Got", videosResponse.videos.length, "videos");
-      setRemoteVideos(videosResponse.videos);
-    } catch (error) {
-      // Ignore AbortError - user navigated away before connection completed
-      if (error instanceof Error && error.name === "AbortError") {
-        console.log("[Connect] Connection aborted (user navigated away)");
-        return;
+          setServerUrl(url);
+          const videosResponse = await api.getVideos(url);
+          console.log("[Connect] Got", videosResponse.videos.length, "videos");
+          setRemoteVideos(videosResponse.videos);
+          return;
+        } catch (error) {
+          // Ignore AbortError - user navigated away before connection completed
+          if (error instanceof Error && error.name === "AbortError") {
+            console.log("[Connect] Connection aborted (user navigated away)");
+            return;
+          }
+          lastError = error;
+          console.warn("[Connect] Discovered connection attempt failed:", url, error);
+        }
       }
+
+      throw lastError ?? new Error("All discovered connection attempts failed");
+    } catch (error) {
       console.error("[Connect] Connection failed:", error);
       const reason = getErrorMessage(error);
       Alert.alert(
         "Connection Failed",
-        `Could not connect to the device.\n\n${reason}`
+        `Could not connect to the device.\n\nTried:\n${candidateUrls.join("\n")}\n\nLast error:\n${reason}\n\nTip: ensure Desktop app Sync is enabled and both devices are on the same Wi-Fi.`
       );
     } finally {
       setIsConnecting(false);

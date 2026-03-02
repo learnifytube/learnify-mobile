@@ -26,6 +26,14 @@ function ensureInitialized() {
   }
 }
 
+function getTxtStringValue(txt: unknown, key: string): string | undefined {
+  if (!txt || typeof txt !== "object") {
+    return undefined;
+  }
+  const value = Reflect.get(txt, key);
+  return typeof value === "string" ? value : undefined;
+}
+
 export function getDeviceName(): string {
   const name = Constants.deviceName || "LearnifyTube Device";
   log("Device name:", name);
@@ -93,16 +101,33 @@ export function startScanning(callbacks: {
   log(`Starting scan for _${SERVICE_TYPE}._tcp services`);
 
   zeroconf.on("resolved", (service) => {
+    const platform =
+      getTxtStringValue(service?.txt, "platform")?.toLowerCase() ?? undefined;
     log("Service resolved:", {
       name: service.name,
       host: service.host,
       addresses: service.addresses,
       port: service.port,
+      platform,
       txt: service.txt,
     });
 
     if (service.name === getDeviceName()) {
       log("Ignoring self");
+      return;
+    }
+
+    // Only show desktop peers for sync connections.
+    if (platform && platform !== "desktop") {
+      log("Ignoring non-desktop service", { name: service.name, platform });
+      return;
+    }
+
+    if (!service.port || service.port <= 0) {
+      log("Ignoring service with invalid port", {
+        name: service.name,
+        port: service.port,
+      });
       return;
     }
 
@@ -115,6 +140,13 @@ export function startScanning(callbacks: {
       );
       host = ipv4 || service.addresses[0];
     }
+    if (typeof host !== "string" || host.trim().length === 0) {
+      log("Ignoring service with missing host", { name: service.name });
+      return;
+    }
+
+    // Remove interface suffix from IPv6 host strings (e.g. fe80::1%en0).
+    host = host.trim().replace(/%.+$/, "");
 
     const peer: DiscoveredPeer = {
       name: service.name,

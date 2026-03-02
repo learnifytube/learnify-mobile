@@ -99,6 +99,8 @@ export default function PlayerScreen() {
   const player = useVideoPlayer(videoSourceUrl || "", (player) => {
     player.loop = false;
     player.timeUpdateEventInterval = 0.5; // Emit timeUpdate every 0.5 seconds
+    player.staysActiveInBackground = true;
+    player.showNowPlayingNotification = true;
     player.play();
   });
 

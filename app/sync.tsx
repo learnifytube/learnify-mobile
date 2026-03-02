@@ -125,44 +125,86 @@ export default function SyncScreen() {
   useEffect(() => {
     if (!serverUrl) {
       setPendingVideoIds(new Set());
+      clearVideoSelection();
     }
-  }, [serverUrl]);
+  }, [serverUrl, clearVideoSelection]);
+
+  const hasCachedData =
+    channels.length > 0 ||
+    playlists.length > 0 ||
+    myLists.length > 0 ||
+    subscriptionVideos.length > 0;
+
+  const showOfflineAlert = useCallback(() => {
+    Alert.alert(
+      "Offline mode",
+      "Reconnect to your desktop app to refresh or sync new videos."
+    );
+  }, []);
 
   const handleRefreshChannels = useCallback(() => {
-    if (serverUrl) fetchChannels(serverUrl);
-  }, [serverUrl, fetchChannels]);
+    if (serverUrl) {
+      fetchChannels(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchChannels, showOfflineAlert]);
 
   const handleRefreshPlaylists = useCallback(() => {
-    if (serverUrl) fetchPlaylists(serverUrl);
-  }, [serverUrl, fetchPlaylists]);
+    if (serverUrl) {
+      fetchPlaylists(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchPlaylists, showOfflineAlert]);
 
   const handleRefreshSubscriptions = useCallback(() => {
-    if (serverUrl) fetchSubscriptions(serverUrl);
-  }, [serverUrl, fetchSubscriptions]);
+    if (serverUrl) {
+      fetchSubscriptions(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchSubscriptions, showOfflineAlert]);
 
   const handleRefreshMyLists = useCallback(() => {
-    if (serverUrl) fetchMyLists(serverUrl);
-  }, [serverUrl, fetchMyLists]);
+    if (serverUrl) {
+      fetchMyLists(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchMyLists, showOfflineAlert]);
 
   const handleChannelPress = useCallback(
     (channel: RemoteChannel) => {
-      if (serverUrl) fetchChannelVideos(serverUrl, channel);
+      if (serverUrl) {
+        fetchChannelVideos(serverUrl, channel);
+        return;
+      }
+      selectChannel(channel);
     },
-    [serverUrl, fetchChannelVideos]
+    [serverUrl, fetchChannelVideos, selectChannel]
   );
 
   const handlePlaylistPress = useCallback(
     (playlist: RemotePlaylist) => {
-      if (serverUrl) fetchPlaylistVideos(serverUrl, playlist);
+      if (serverUrl) {
+        fetchPlaylistVideos(serverUrl, playlist);
+        return;
+      }
+      selectPlaylist(playlist);
     },
-    [serverUrl, fetchPlaylistVideos]
+    [serverUrl, fetchPlaylistVideos, selectPlaylist]
   );
 
   const handleMyListPress = useCallback(
     (myList: RemoteMyList) => {
-      if (serverUrl) fetchMyListVideos(serverUrl, myList);
+      if (serverUrl) {
+        fetchMyListVideos(serverUrl, myList);
+        return;
+      }
+      selectMyList(myList);
     },
-    [serverUrl, fetchMyListVideos]
+    [serverUrl, fetchMyListVideos, selectMyList]
   );
 
   const handleBackPress = useCallback(() => {
@@ -229,10 +271,16 @@ export default function SyncScreen() {
 
   const playSubscriptionVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
       const localPath =
         getVideoLocalPath(video.id) ??
         libraryVideos.find((v) => v.id === video.id)?.localPath;
+      if (!serverUrl && !localPath) {
+        Alert.alert(
+          "Offline mode",
+          "This video is not downloaded on mobile yet."
+        );
+        return;
+      }
 
       const streamingVideo: StreamingVideo = {
         id: video.id,
@@ -243,7 +291,13 @@ export default function SyncScreen() {
         localPath: localPath ?? undefined,
       };
 
-      startPlaylist("subscriptions", "Subscriptions", [streamingVideo], 0, serverUrl);
+      startPlaylist(
+        "subscriptions",
+        "Subscriptions",
+        [streamingVideo],
+        0,
+        serverUrl ?? undefined
+      );
       router.push(`/player/${video.id}`);
     },
     [libraryVideos, serverUrl, startPlaylist, router]
@@ -251,16 +305,21 @@ export default function SyncScreen() {
 
   const handleSubscriptionVideoPress = useCallback(
     async (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
+      if (videoExistsLocally(video.id)) {
+        playSubscriptionVideo(video);
+        return;
+      }
+      if (!serverUrl) {
+        Alert.alert(
+          "Offline mode",
+          "Reconnect to desktop to stream or sync this video."
+        );
+        return;
+      }
       if (pendingVideoIds.has(video.id)) return;
 
       setPending(video.id, true);
       try {
-        if (videoExistsLocally(video.id)) {
-          playSubscriptionVideo(video);
-          return;
-        }
-
         const response = await api.requestServerDownload(serverUrl, { videoId: video.id });
         if (!response.success && !response.status) {
           throw new Error(response.message || "Server refused download request");
@@ -299,16 +358,24 @@ export default function SyncScreen() {
 
   const handlePlayVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
-      if (!serverUrl) return;
+      const localPath =
+        getVideoLocalPath(video.id) ??
+        libraryVideos.find((v) => v.id === video.id)?.localPath;
+      if (!serverUrl && !localPath) {
+        Alert.alert(
+          "Offline mode",
+          "This video is not downloaded on mobile yet."
+        );
+        return;
+      }
 
-      const localVideo = libraryVideos.find((v) => v.id === video.id);
       const streamingVideo: StreamingVideo = {
         id: video.id,
         title: video.title,
         channelTitle: video.channelTitle,
         duration: video.duration,
         thumbnailUrl: video.thumbnailUrl ?? undefined,
-        localPath: localVideo?.localPath,
+        localPath: localPath ?? undefined,
       };
 
       let contextTitle = "Now Playing";
@@ -335,30 +402,45 @@ export default function SyncScreen() {
 
       const playlistStreamingVideos: StreamingVideo[] = currentVideos.map(
         (v) => {
-          const local = libraryVideos.find((lv) => lv.id === v.id);
+          const local =
+            getVideoLocalPath(v.id) ??
+            libraryVideos.find((lv) => lv.id === v.id)?.localPath;
           return {
             id: v.id,
             title: v.title,
             channelTitle: v.channelTitle,
             duration: v.duration,
             thumbnailUrl: v.thumbnailUrl ?? undefined,
-            localPath: local?.localPath,
+            localPath: local ?? undefined,
           };
         }
       );
+      const playablePlaylistVideos = serverUrl
+        ? playlistStreamingVideos
+        : playlistStreamingVideos.filter((v) => !!v.localPath);
 
-      const startIndex = playlistStreamingVideos.findIndex(
+      const startIndex = playablePlaylistVideos.findIndex(
         (v) => v.id === video.id
       );
+      const fallbackVideos =
+        serverUrl || streamingVideo.localPath ? [streamingVideo] : [];
+      const videosToPlay =
+        playablePlaylistVideos.length > 0 ? playablePlaylistVideos : fallbackVideos;
+
+      if (videosToPlay.length === 0) {
+        Alert.alert(
+          "Offline mode",
+          "No playable video source is available."
+        );
+        return;
+      }
 
       startPlaylist(
         contextId,
         contextTitle,
-        playlistStreamingVideos.length > 0
-          ? playlistStreamingVideos
-          : [streamingVideo],
+        videosToPlay,
         startIndex >= 0 ? startIndex : 0,
-        serverUrl
+        serverUrl ?? undefined
       );
 
       router.push(`/player/${video.id}`);
@@ -427,7 +509,7 @@ export default function SyncScreen() {
     clearVideoSelection,
   ]);
 
-  if (!serverUrl) {
+  if (!serverUrl && !hasCachedData) {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>Not connected to server</Text>
@@ -466,9 +548,9 @@ export default function SyncScreen() {
       (v) => v.downloadStatus === "completed"
     );
     // Videos not yet synced to mobile
-    const syncableCount = availableVideos.filter(
-      (v) => !syncedVideoIds.has(v.id)
-    ).length;
+    const syncableCount = serverUrl
+      ? availableVideos.filter((v) => !syncedVideoIds.has(v.id)).length
+      : 0;
     // Videos already saved locally
     const savedCount = availableVideos.filter((v) =>
       syncedVideoIds.has(v.id)
@@ -517,6 +599,10 @@ export default function SyncScreen() {
         savePlaylist(playlistId, playlistTitle, playlistType, sourceId, thumbnailUrl, videoInfos);
       }
 
+      if (!serverUrl) {
+        return;
+      }
+
       // Queue downloads for videos not yet synced
       for (const video of availableVideos) {
         if (!syncedVideoIds.has(video.id)) {
@@ -548,7 +634,7 @@ export default function SyncScreen() {
             </Text>
           </View>
           {/* Save Offline Button */}
-          {currentVideos.length > 0 && (
+          {currentVideos.length > 0 && serverUrl && (
             <Pressable
               style={[
                 styles.saveOfflineButton,
@@ -630,6 +716,7 @@ export default function SyncScreen() {
                 isSyncedToMobile={syncedVideoIds.has(item.id)}
                 onPress={() => {
                   if (
+                    serverUrl &&
                     item.downloadStatus === "completed" &&
                     !syncedVideoIds.has(item.id)
                   ) {
@@ -637,11 +724,12 @@ export default function SyncScreen() {
                   }
                 }}
                 onPlayPress={
-                  item.downloadStatus === "completed"
+                  item.downloadStatus === "completed" || syncedVideoIds.has(item.id)
                     ? () => handlePlayVideo(item)
                     : undefined
                 }
                 onSyncPress={
+                  serverUrl &&
                   item.downloadStatus === "completed" &&
                   !syncedVideoIds.has(item.id)
                     ? () => handleSyncVideo(item)
@@ -659,6 +747,19 @@ export default function SyncScreen() {
   // Tab-based list view
   return (
     <View style={styles.container}>
+      {!serverUrl && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>
+            Offline mode: showing cached data
+          </Text>
+          <Pressable
+            style={styles.offlineBannerButton}
+            onPress={() => router.push("/connect")}
+          >
+            <Text style={styles.offlineBannerButtonText}>Reconnect</Text>
+          </Pressable>
+        </View>
+      )}
       <SyncTabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
       {activeTab === "channels" && (
@@ -676,6 +777,7 @@ export default function SyncScreen() {
           playlists={playlists}
           isLoading={isLoadingPlaylists}
           error={playlistsError}
+          serverUrl={serverUrl ?? undefined}
           onPlaylistPress={handlePlaylistPress}
           onRefresh={handleRefreshPlaylists}
         />
@@ -735,6 +837,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#09090b",
+  },
+  offlineBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#27272a",
+    backgroundColor: "#111827",
+  },
+  offlineBannerText: {
+    color: "#f3f4f6",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  offlineBannerButton: {
+    backgroundColor: "#6366f1",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  offlineBannerButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
   },
   centered: {
     flex: 1,
