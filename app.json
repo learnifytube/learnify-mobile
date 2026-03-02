@@ -2,7 +2,7 @@
   "expo": {
     "name": "LearnifyTube",
     "slug": "learnify-mobile",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "learnify",
@@ -38,7 +38,7 @@
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE"
       ],
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "favicon": "./assets/favicon.png",
