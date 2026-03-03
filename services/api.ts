@@ -233,6 +233,33 @@ export const api = {
     return response.json();
   },
 
+  // Request the desktop server to download a transcript for a video via yt-dlp
+  async requestTranscriptDownload(
+    serverUrl: string,
+    videoId: string,
+    lang?: string
+  ): Promise<{
+    success: boolean;
+    videoId: string;
+    language?: string;
+    status?: string;
+    message: string;
+  }> {
+    const response = await fetchWithTimeout(
+      `${serverUrl}/api/video/${encodeURIComponent(videoId)}/transcript/download`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: lang ?? "en" }),
+      },
+      30000 // Longer timeout for download operations
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
   // === Subscriptions API Methods ===
 
   async getSubscriptions(
@@ -314,5 +341,90 @@ export const api = {
       console.log("[API] My list videos endpoint not available");
       return { videos: [] };
     }
+  },
+
+  // === Flashcard & Word Sync API Methods ===
+
+  async getFlashcards(
+    serverUrl: string,
+    dueOnly = false
+  ): Promise<{ flashcards: import("../types").RemoteFlashcard[] }> {
+    const query = dueOnly ? "?due=true" : "";
+    const res = await fetchWithTimeout(
+      `${serverUrl}/api/flashcards${query}`
+    );
+    if (!res.ok) throw new Error(`Failed to get flashcards: ${res.status}`);
+    return res.json() as Promise<{
+      flashcards: import("../types").RemoteFlashcard[];
+    }>;
+  },
+
+  async reviewFlashcard(
+    serverUrl: string,
+    id: string,
+    grade: number
+  ): Promise<{ success: boolean; nextReview: string }> {
+    const res = await fetchWithTimeout(`${serverUrl}/api/flashcards/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, grade }),
+    });
+    if (!res.ok) throw new Error(`Failed to review flashcard: ${res.status}`);
+    return res.json() as Promise<{ success: boolean; nextReview: string }>;
+  },
+
+  async getSavedWords(
+    serverUrl: string
+  ): Promise<{ words: import("../types").RemoteSavedWord[] }> {
+    const res = await fetchWithTimeout(`${serverUrl}/api/saved-words`);
+    if (!res.ok) throw new Error(`Failed to get saved words: ${res.status}`);
+    return res.json() as Promise<{
+      words: import("../types").RemoteSavedWord[];
+    }>;
+  },
+
+  async translateWord(
+    serverUrl: string,
+    text: string,
+    targetLang: string,
+    options?: {
+      sourceLang?: string;
+      videoId?: string;
+      timestampSeconds?: number;
+      contextText?: string;
+    }
+  ): Promise<import("../types").TranslateResult> {
+    const res = await fetchWithTimeout(`${serverUrl}/api/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        targetLang,
+        sourceLang: options?.sourceLang,
+        videoId: options?.videoId,
+        timestampSeconds: options?.timestampSeconds,
+        contextText: options?.contextText,
+      }),
+    });
+    if (!res.ok) throw new Error(`Failed to translate: ${res.status}`);
+    return res.json() as Promise<import("../types").TranslateResult>;
+  },
+
+  async saveWord(
+    serverUrl: string,
+    translationId: string,
+    notes?: string
+  ): Promise<{ success: boolean; alreadySaved: boolean; id: string }> {
+    const res = await fetchWithTimeout(`${serverUrl}/api/saved-words/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ translationId, notes }),
+    });
+    if (!res.ok) throw new Error(`Failed to save word: ${res.status}`);
+    return res.json() as Promise<{
+      success: boolean;
+      alreadySaved: boolean;
+      id: string;
+    }>;
   },
 };

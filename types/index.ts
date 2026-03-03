@@ -137,3 +137,45 @@ export interface RemoteMyList {
 
 // Browse tabs for the home screen
 export type BrowseTab = "mylists" | "channels" | "playlists" | "subscriptions";
+
+// Flashcard sync types
+export interface RemoteFlashcard {
+  id: string;
+  videoId: string | null;
+  frontContent: string;
+  backContent: string;
+  contextText: string | null;
+  cardType: "basic" | "cloze" | "concept";
+  tags: string[];
+  clozeContent: string | null;
+  difficulty: number;
+  nextReviewAt: string | null;
+  reviewCount: number;
+  easeFactor: number;
+  interval: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+// Saved word sync types
+export interface RemoteSavedWord {
+  id: string;
+  notes: string | null;
+  reviewCount: number;
+  lastReviewedAt: number | null;
+  createdAt: number;
+  sourceText: string;
+  translatedText: string;
+  sourceLang: string;
+  targetLang: string;
+  translationId: string;
+}
+
+// Translation result from desktop proxy
+export interface TranslateResult {
+  success: boolean;
+  translatedText: string;
+  translationId: string;
+  detectedLang: string;
+  fromCache: boolean;
+}
