@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLibraryStore } from "../../stores/library";
 import { usePlaybackStore } from "../../stores/playback";
 import { useConnectionStore } from "../../stores/connection";
+import { useSettingsStore } from "../../stores/settings";
 import { api } from "../../services/api";
 import { getVideoLocalPath } from "../../services/downloader";
 import type { TranscriptSegment, Transcript, TranslateResult } from "../../types";
@@ -196,7 +197,8 @@ export default function PlayerScreen() {
       setWordSegmentTimestamp(segmentTimestamp);
 
       try {
-        const result = await api.translateWord(url, cleanWord, "en", {
+        const targetLang = useSettingsStore.getState().translationTargetLang;
+        const result = await api.translateWord(url, cleanWord, targetLang, {
           videoId: id,
           timestampSeconds: segmentTimestamp,
         });
