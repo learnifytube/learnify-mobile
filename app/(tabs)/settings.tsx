@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useSettingsStore, LANGUAGES } from "../../stores/settings";
 import { useConnectionStore } from "../../stores/connection";
 import { api } from "../../services/api";
+import * as wordsRepo from "../../db/repositories/words";
 import type { RemoteSavedWord } from "../../types";
 
 export default function SettingsScreen() {
@@ -28,11 +29,17 @@ export default function SettingsScreen() {
   const selectedLang = LANGUAGES.find((l) => l.code === targetLang) ?? LANGUAGES[0];
 
   const loadSavedWords = useCallback(async () => {
-    if (!serverUrl) return;
     setIsLoadingWords(true);
     try {
-      const result = await api.getSavedWords(serverUrl);
-      setSavedWords(result.words);
+      // Local-first: always show cached words immediately (works offline).
+      setSavedWords(wordsRepo.getAllSavedWordsLocal());
+
+      // If connected, refresh from desktop and upsert to local cache.
+      if (serverUrl) {
+        const result = await api.getSavedWords(serverUrl);
+        wordsRepo.upsertRemoteSavedWords(result.words);
+        setSavedWords(wordsRepo.getAllSavedWordsLocal());
+      }
     } catch (e) {
       console.log("[Settings] Failed to load saved words:", e);
     } finally {
@@ -41,10 +48,10 @@ export default function SettingsScreen() {
   }, [serverUrl]);
 
   useEffect(() => {
-    if (showMyWords && serverUrl) {
+    if (showMyWords) {
       loadSavedWords();
     }
-  }, [showMyWords, serverUrl, loadSavedWords]);
+  }, [showMyWords, loadSavedWords]);
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
@@ -180,13 +187,6 @@ export default function SettingsScreen() {
             <View style={styles.wordsCentered}>
               <ActivityIndicator size="large" color="#e94560" />
               <Text style={styles.wordsLoadingText}>Loading words...</Text>
-            </View>
-          ) : !serverUrl ? (
-            <View style={styles.wordsCentered}>
-              <Text style={styles.wordsEmptyIcon}>📡</Text>
-              <Text style={styles.wordsEmptyText}>
-                Connect to desktop to view saved words
-              </Text>
             </View>
           ) : savedWords.length === 0 ? (
             <View style={styles.wordsCentered}>

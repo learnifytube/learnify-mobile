@@ -19,6 +19,9 @@ import { useConnectionStore } from "../../stores/connection";
 import { useSettingsStore } from "../../stores/settings";
 import { api } from "../../services/api";
 import { getVideoLocalPath } from "../../services/downloader";
+import * as wordsRepo from "../../db/repositories/words";
+import * as watchHistoryRepo from "../../db/repositories/watchHistory";
+import * as videoRepo from "../../db/repositories/videos";
 import type { TranscriptSegment, Transcript, TranslateResult } from "../../types";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -26,7 +29,7 @@ const VIDEO_HEIGHT = (SCREEN_WIDTH * 9) / 16;
 const SEGMENT_HEIGHT = 56; // Approximate height of each segment row
 
 export default function PlayerScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, start } = useLocalSearchParams<{ id: string; start?: string }>();
   const libraryVideo = useLibraryStore((state) =>
     state.videos.find((v) => v.id === id)
   );
@@ -38,6 +41,12 @@ export default function PlayerScreen() {
   const [isDownloadingTranscript, setIsDownloadingTranscript] = useState(false);
   const transcriptListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
+  const watchAccumulatorRef = useRef(0);
+  const lastPlaybackTimeRef = useRef(0);
+  const lastPositionRef = useRef(0);
+  const lastPersistedAtRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const initialSeekDoneRef = useRef(false);
 
   // Word definition lookup state
   const [selectedWord, setSelectedWord] = useState<string | null>(null);
@@ -63,17 +72,44 @@ export default function PlayerScreen() {
   const hasPreviousVideo = usePlaybackStore((s) => s.hasPrevious());
   const setCurrentIndex = usePlaybackStore((s) => s.setCurrentIndex);
   const streamServerUrl = usePlaybackStore((s) => s.streamServerUrl);
-  const isStreaming = usePlaybackStore((s) => s.isStreaming);
   const getStreamUrl = usePlaybackStore((s) => s.getStreamUrl);
 
   // Get video from playlist if streaming, otherwise from library
   const playlistVideo = playlistVideos.find((v) => v.id === id);
-  const video = libraryVideo ?? playlistVideo;
+  const dbVideo = useMemo(() => {
+    if (!id) return undefined;
+    const storedVideo = videoRepo.getVideoById(id);
+    if (!storedVideo) return undefined;
+
+    return {
+      id: storedVideo.id,
+      title: storedVideo.title,
+      channelTitle: storedVideo.channelTitle,
+      duration: storedVideo.duration,
+      thumbnailUrl: storedVideo.thumbnailUrl ?? undefined,
+      localPath: storedVideo.localPath ?? undefined,
+    };
+  }, [id]);
+  const video = libraryVideo ?? playlistVideo ?? dbVideo;
 
   // Determine video source URL - resolve path dynamically to handle sandbox changes
   const localVideoPath = id ? getVideoLocalPath(id) : null;
+  const directStreamUrl =
+    !localVideoPath && serverUrl && id ? `${serverUrl}/api/video/${id}/file` : null;
   const videoSourceUrl =
-    localVideoPath ?? (streamServerUrl && id ? getStreamUrl(id) : null);
+    localVideoPath ??
+    (streamServerUrl && id ? getStreamUrl(id) : null) ??
+    directStreamUrl;
+
+  useEffect(() => {
+    watchAccumulatorRef.current = 0;
+    lastPlaybackTimeRef.current = 0;
+    lastPositionRef.current = 0;
+    lastPersistedAtRef.current = 0;
+    isPlayingRef.current = false;
+    initialSeekDoneRef.current = false;
+    setCurrentTime(0);
+  }, [id]);
 
   // Sync playlist index when video ID changes
   useEffect(() => {
@@ -216,27 +252,95 @@ export default function PlayerScreen() {
   // Handle saving a word
   const handleSaveWord = useCallback(async () => {
     const url = effectiveServerUrl;
-    if (!url || !wordTranslation?.translationId || isSavingWord) return;
+    if (!wordTranslation?.translationId || isSavingWord || !selectedWord) return;
 
     setIsSavingWord(true);
+    let savedLocally = false;
+    let savedOnDesktop = false;
+
     try {
-      const result = await api.saveWord(url, wordTranslation.translationId);
-      if (result.success) {
+      // Save locally first so users can always see words in offline mode.
+      const targetLang = useSettingsStore.getState().translationTargetLang;
+      const localSavedWord = wordsRepo.saveTranslatedWordLocal({
+        translationId: wordTranslation.translationId,
+        sourceText: selectedWord,
+        translatedText: wordTranslation.translatedText,
+        sourceLang: wordTranslation.detectedLang || "auto",
+        targetLang,
+      });
+
+      savedLocally = !!localSavedWord;
+
+      // Best-effort desktop sync when connected.
+      if (url) {
+        const result = await api.saveWord(url, wordTranslation.translationId);
+        savedOnDesktop = result.success;
+      }
+
+      if (savedLocally || savedOnDesktop) {
         setWordSaved(true);
+      } else {
+        Alert.alert("Error", "Could not save word");
       }
     } catch (e) {
       console.log("[Player] Save word failed:", e);
-      Alert.alert("Error", "Could not save word");
+      if (!savedLocally && !savedOnDesktop) {
+        Alert.alert("Error", "Could not save word");
+      }
     } finally {
       setIsSavingWord(false);
     }
-  }, [effectiveServerUrl, wordTranslation, isSavingWord]);
+  }, [effectiveServerUrl, wordTranslation, isSavingWord, selectedWord]);
 
   const closeWordModal = useCallback(() => {
     setSelectedWord(null);
     setWordTranslation(null);
     setWordSaved(false);
   }, []);
+
+  const persistWatchProgress = useCallback(
+    (positionSeconds: number, force = false) => {
+      if (!video?.id) return;
+
+      const now = Date.now();
+      const normalizedPosition = Math.max(0, Math.floor(positionSeconds));
+      const additionalWatchSeconds = Math.max(
+        0,
+        Math.floor(watchAccumulatorRef.current)
+      );
+
+      if (normalizedPosition <= 0 && additionalWatchSeconds <= 0) {
+        return;
+      }
+
+      if (!force && additionalWatchSeconds < 2) {
+        return;
+      }
+
+      if (!force && now - lastPersistedAtRef.current < 5000) {
+        return;
+      }
+
+      try {
+        watchHistoryRepo.upsertWatchProgress({
+          videoId: video.id,
+          title: video.title,
+          channelTitle: video.channelTitle,
+          duration: video.duration,
+          thumbnailUrl: video.thumbnailUrl ?? null,
+          localPath: localVideoPath ?? video.localPath ?? null,
+          lastPositionSeconds: normalizedPosition,
+          additionalWatchSeconds,
+          lastWatchedAt: now,
+        });
+        watchAccumulatorRef.current = 0;
+        lastPersistedAtRef.current = now;
+      } catch (error) {
+        console.log("[Player] Failed to persist watch progress:", error);
+      }
+    },
+    [video, localVideoPath]
+  );
 
   const player = useVideoPlayer(videoSourceUrl || "", (player) => {
     player.loop = false;
@@ -247,21 +351,68 @@ export default function PlayerScreen() {
   });
 
   useEffect(() => {
+    if (!player || initialSeekDoneRef.current) return;
+
+    const startSeconds = Number(start ?? 0);
+    if (!Number.isFinite(startSeconds) || startSeconds <= 0) {
+      initialSeekDoneRef.current = true;
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      try {
+        player.currentTime = startSeconds;
+        setCurrentTime(startSeconds);
+        lastPlaybackTimeRef.current = startSeconds;
+        lastPositionRef.current = startSeconds;
+      } catch (error) {
+        console.log("[Player] Failed to seek to start time:", error);
+      } finally {
+        initialSeekDoneRef.current = true;
+      }
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [player, start]);
+
+  useEffect(() => {
     if (!player) return;
 
     const subscription = player.addListener("playingChange", (event) => {
       setIsPlaying(event.isPlaying);
+      isPlayingRef.current = event.isPlaying;
+      if (!event.isPlaying) {
+        persistWatchProgress(lastPositionRef.current, true);
+      }
     });
 
     const timeSubscription = player.addListener(
       "timeUpdate",
       (event) => {
-        setCurrentTime(event.currentTime);
+        const nextTime = event.currentTime;
+        const previousTime = lastPlaybackTimeRef.current;
+        const delta = nextTime - previousTime;
+
+        if (isPlayingRef.current && delta > 0 && delta < 5) {
+          watchAccumulatorRef.current += delta;
+        }
+
+        lastPlaybackTimeRef.current = nextTime;
+        lastPositionRef.current = nextTime;
+        setCurrentTime(nextTime);
+
+        if (watchAccumulatorRef.current >= 5) {
+          persistWatchProgress(nextTime);
+        }
       }
     );
 
     // Auto-advance to next video in playlist when current video ends
     const endSubscription = player.addListener("playToEnd", () => {
+      const finalPosition = video?.duration ?? lastPositionRef.current;
+      lastPositionRef.current = finalPosition;
+      persistWatchProgress(finalPosition, true);
+
       if (playlistId && hasNextVideo) {
         const nextVideo = playNext();
         if (nextVideo) {
@@ -271,39 +422,46 @@ export default function PlayerScreen() {
     });
 
     return () => {
+      persistWatchProgress(lastPositionRef.current, true);
       subscription.remove();
       timeSubscription.remove();
       endSubscription.remove();
     };
-  }, [player, playlistId, hasNextVideo, playNext]);
+  }, [player, playlistId, hasNextVideo, playNext, persistWatchProgress, video]);
 
   const handleSegmentPress = (segment: TranscriptSegment) => {
     if (player) {
       player.currentTime = segment.start;
+      setCurrentTime(segment.start);
+      lastPlaybackTimeRef.current = segment.start;
+      lastPositionRef.current = segment.start;
     }
   };
 
   const handleBackPress = useCallback(() => {
+    persistWatchProgress(lastPositionRef.current, true);
     // Clear playlist context when manually going back
     if (playlistId) {
       clearPlaylist();
     }
     router.back();
-  }, [playlistId, clearPlaylist]);
+  }, [playlistId, clearPlaylist, persistWatchProgress]);
 
   const handlePreviousPress = useCallback(() => {
+    persistWatchProgress(lastPositionRef.current, true);
     const prevVideo = playPrevious();
     if (prevVideo) {
       router.replace(`/player/${prevVideo.id}`);
     }
-  }, [playPrevious]);
+  }, [playPrevious, persistWatchProgress]);
 
   const handleNextPress = useCallback(() => {
+    persistWatchProgress(lastPositionRef.current, true);
     const nextVideo = playNext();
     if (nextVideo) {
       router.replace(`/player/${nextVideo.id}`);
     }
-  }, [playNext]);
+  }, [playNext, persistWatchProgress]);
 
   // Use remote transcript if available, otherwise fall back to local
   const transcript = streamingTranscript ?? libraryVideo?.transcript;
@@ -423,13 +581,7 @@ export default function PlayerScreen() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <View style={styles.headerRow}>
-          <Pressable
-            onPress={() => { // Modified onPress
-              clearPlaylist();
-              router.back();
-            }}
-            style={styles.backButton}
-          >
+          <Pressable onPress={handleBackPress} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </Pressable>
           {playlistId && (
@@ -439,12 +591,7 @@ export default function PlayerScreen() {
                   styles.navButton,
                   !hasPreviousVideo && styles.navButtonDisabled,
                 ]}
-                onPress={() => { // Modified onPress
-                  const prev = playPrevious();
-                  if (prev?.id) {
-                    router.replace(`/player/${prev.id}`);
-                  }
-                }}
+                onPress={handlePreviousPress}
                 disabled={!hasPreviousVideo}
               >
                 <Text
@@ -493,7 +640,7 @@ export default function PlayerScreen() {
         </Text>
         <View style={styles.channelRow}>
           <Text style={styles.channel}>{video.channelTitle}</Text>
-          {!localVideoPath && (streamServerUrl || isStreaming) && (
+          {!localVideoPath && effectiveServerUrl && (
             <View style={styles.streamingBadge}>
               <Text style={styles.streamingBadgeText}>Streaming</Text>
             </View>
