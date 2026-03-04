@@ -1,13 +1,17 @@
 import {
+  useState,
+} from "react";
+import {
   View,
   Text,
   StyleSheet,
   Pressable,
   Image,
+  Platform,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
-import { Link } from "expo-router";
+import { Link, type Href } from "expo-router";
 import type { Video } from "../types";
 import { useDownloadStore } from "../stores/downloads";
 import { downloadManager } from "../services/downloadManager";
@@ -18,6 +22,9 @@ import { Check, AlertCircle, Film } from "../theme/icons";
 interface VideoCardProps {
   video: Video;
   style?: StyleProp<ViewStyle>;
+  playerHref?: Href;
+  hasTVPreferredFocus?: boolean;
+  resumeLabel?: string;
 }
 
 function formatDuration(seconds: number): string {
@@ -29,10 +36,18 @@ function formatDuration(seconds: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-export function VideoCard({ video, style }: VideoCardProps) {
+export function VideoCard({
+  video,
+  style,
+  playerHref,
+  hasTVPreferredFocus = false,
+  resumeLabel,
+}: VideoCardProps) {
   const download = useDownloadStore((state) =>
     state.queue.find((d) => d.videoId === video.id)
   );
+  const isTv = Platform.isTV;
+  const [isFocused, setIsFocused] = useState(false);
 
   const isDownloaded = videoExistsLocally(video.id);
   const isDownloading = download?.status === "downloading";
@@ -47,10 +62,23 @@ export function VideoCard({ video, style }: VideoCardProps) {
     downloadManager.retry(video.id);
   };
 
+  const href = playerHref ?? (`/player/${video.id}` as Href);
+
   return (
-    <Link href={`/player/${video.id}`} asChild>
+    <Link href={href} asChild>
       <Pressable
-        style={StyleSheet.flatten([styles.container, style])}
+        style={({ pressed }) =>
+          StyleSheet.flatten([
+            styles.container,
+            style,
+            isTv && isFocused && styles.containerFocused,
+            pressed && styles.containerPressed,
+          ])
+        }
+        focusable={isTv}
+        hasTVPreferredFocus={hasTVPreferredFocus}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
       >
         <View style={styles.thumbnailContainer}>
           {video.thumbnailUrl ? (
@@ -103,12 +131,17 @@ export function VideoCard({ video, style }: VideoCardProps) {
           <Text style={styles.channel} numberOfLines={1}>
             {video.channelTitle}
           </Text>
-          {(isDownloading || isQueued) && (
+          {resumeLabel ? (
+            <Text style={styles.resumeLabel} numberOfLines={1}>
+              {resumeLabel}
+            </Text>
+          ) : null}
+          {!isTv && (isDownloading || isQueued) && (
             <Pressable style={styles.cancelButton} onPress={handleCancel}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </Pressable>
           )}
-          {isFailed && (
+          {!isTv && isFailed && (
             <View style={styles.failedActions}>
               <Text style={styles.errorText} numberOfLines={1}>
                 {download?.error || "Failed"}
@@ -129,6 +162,21 @@ const styles = StyleSheet.create({
     flex: 1,
     margin: spacing.sm,
     maxWidth: "50%",
+    borderRadius: radius.lg,
+    padding: spacing.xs,
+  },
+  containerFocused: {
+    backgroundColor: colors.cardHover,
+    borderWidth: 2,
+    borderColor: colors.ring,
+    shadowColor: colors.ring,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  containerPressed: {
+    opacity: 0.88,
   },
   thumbnailContainer: {
     aspectRatio: 16 / 9,
@@ -231,6 +279,12 @@ const styles = StyleSheet.create({
   channel: {
     color: colors.mutedForeground,
     fontSize: fontSize.xs,
+  },
+  resumeLabel: {
+    marginTop: 4,
+    color: colors.primary,
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.medium,
   },
   cancelButton: {
     marginTop: 6,

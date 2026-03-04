@@ -39,6 +39,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "./plugins/withAndroidTvSupport",
+        {
+          "banner": "./assets/tv-banner.png"
+        }
+      ],
       "./plugins/withAndroidCleartextNetwork",
       [
         "expo-video",

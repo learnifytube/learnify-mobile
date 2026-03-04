@@ -30,6 +30,8 @@ export interface WatchHistoryItem {
   lastWatchedAt: number | null;
 }
 
+export type WatchHistoryLookup = Record<string, WatchHistoryItem>;
+
 function ensureVideo(input: UpsertWatchProgressInput) {
   const now = Date.now();
   const existing = getDb().select().from(videos).where(eq(videos.id, input.videoId)).get();
@@ -154,4 +156,42 @@ export function getWatchHistory(limit = 100): WatchHistoryItem[] {
     lastPositionSeconds: row.lastPositionSeconds ?? 0,
     lastWatchedAt: row.lastWatchedAt ?? null,
   }));
+}
+
+export function getWatchHistoryLookup(limit = 1000): WatchHistoryLookup {
+  const items = getWatchHistory(limit);
+  return items.reduce<WatchHistoryLookup>((acc, item) => {
+    acc[item.videoId] = item;
+    return acc;
+  }, {});
+}
+
+export function getMostRecentWatchForVideoIds(
+  videoIds: string[],
+  lookup?: WatchHistoryLookup
+): WatchHistoryItem | null {
+  if (videoIds.length === 0) return null;
+
+  const historyLookup =
+    lookup ?? getWatchHistoryLookup(Math.max(1000, videoIds.length * 5));
+
+  let mostRecent: WatchHistoryItem | null = null;
+
+  for (const videoId of videoIds) {
+    const item = historyLookup[videoId];
+    if (!item) continue;
+
+    if (!mostRecent) {
+      mostRecent = item;
+      continue;
+    }
+
+    const itemWatchedAt = item.lastWatchedAt ?? 0;
+    const mostRecentWatchedAt = mostRecent.lastWatchedAt ?? 0;
+    if (itemWatchedAt > mostRecentWatchedAt) {
+      mostRecent = item;
+    }
+  }
+
+  return mostRecent;
 }

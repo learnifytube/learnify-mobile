@@ -1,4 +1,13 @@
-import { View, Text, Pressable, Image, StyleSheet, ActivityIndicator } from "react-native";
+import { useState } from "react";
+import {
+    View,
+    Text,
+    Pressable,
+    Image,
+    StyleSheet,
+    ActivityIndicator,
+    Platform,
+} from "react-native";
 import { colors, radius, spacing, fontSize, fontWeight } from "../theme";
 import { Film } from "../theme/icons";
 
@@ -22,6 +31,8 @@ interface VideoGridCardProps {
     pending?: PendingState;
     onPress: () => void;
     onCancelPress?: () => void;
+    subtitle?: string;
+    hasTVPreferredFocus?: boolean;
 }
 
 function formatDuration(seconds: number): string {
@@ -38,16 +49,29 @@ export function VideoGridCard({
     pending = { type: "none" },
     onPress,
     onCancelPress,
+    subtitle,
+    hasTVPreferredFocus = false,
 }: VideoGridCardProps) {
     const isPending = pending.type !== "none" && pending.type !== "failed";
+    const isTv = Platform.isTV;
+    const [isFocused, setIsFocused] = useState(false);
 
     return (
         <Pressable
             style={({ pressed }) => [styles.card, pressed && !isPending && styles.cardPressed]}
             onPress={onPress}
             disabled={isPending}
+            focusable={isTv}
+            hasTVPreferredFocus={hasTVPreferredFocus}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
         >
-            <View style={styles.thumbnailContainer}>
+            <View
+                style={[
+                    styles.thumbnailContainer,
+                    isTv && isFocused && styles.thumbnailContainerFocused,
+                ]}
+            >
                 {video.thumbnailUrl ? (
                     <Image source={{ uri: video.thumbnailUrl }} style={styles.thumbnail} resizeMode="cover" />
                 ) : (
@@ -100,10 +124,19 @@ export function VideoGridCard({
             <Text style={styles.channel} numberOfLines={1}>
                 {video.channelTitle}
             </Text>
+            {subtitle ? (
+                <Text style={styles.subtitle} numberOfLines={1}>
+                    {subtitle}
+                </Text>
+            ) : null}
 
             {/* Cancel button when pending */}
             {isPending && onCancelPress && (
-                <Pressable style={styles.cancelButton} onPress={onCancelPress}>
+                <Pressable
+                    style={styles.cancelButton}
+                    onPress={onCancelPress}
+                    focusable={!isTv}
+                >
                     <Text style={styles.cancelText}>Cancel</Text>
                 </Pressable>
             )}
@@ -125,6 +158,15 @@ const styles = StyleSheet.create({
         borderRadius: radius.md,
         overflow: "hidden",
         backgroundColor: colors.card,
+    },
+    thumbnailContainerFocused: {
+        borderWidth: 2,
+        borderColor: colors.ring,
+        shadowColor: colors.ring,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.35,
+        shadowRadius: 12,
+        elevation: 8,
     },
     thumbnail: {
         width: "100%",
@@ -198,6 +240,12 @@ const styles = StyleSheet.create({
         color: colors.mutedForeground,
         fontSize: fontSize.xs,
         marginTop: 2,
+    },
+    subtitle: {
+        color: colors.primary,
+        fontSize: fontSize.xs,
+        marginTop: 2,
+        fontWeight: fontWeight.medium,
     },
     cancelButton: {
         marginTop: 4,
