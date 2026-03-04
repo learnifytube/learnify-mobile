@@ -13,16 +13,6 @@
       "resizeMode": "contain",
       "backgroundColor": "#0A0F1A"
     },
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.learnifytube.mobile",
-      "infoPlist": {
-        "NSLocalNetworkUsageDescription": "LearnifyTube needs local network access to sync videos from your desktop app and share videos with other devices.",
-        "NSBonjourServices": [
-          "_learnify._tcp"
-        ]
-      }
-    },
     "android": {
       "package": "com.learnifytube.mobile",
       "usesCleartextTraffic": true,

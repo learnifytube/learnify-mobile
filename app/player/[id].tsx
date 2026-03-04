@@ -5,10 +5,12 @@ import {
   StyleSheet,
   Pressable,
   FlatList,
+  ScrollView,
   Dimensions,
   ActivityIndicator,
   Alert,
   Modal,
+  type ViewToken,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -27,6 +29,49 @@ import type { TranscriptSegment, Transcript, TranslateResult } from "../../types
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const VIDEO_HEIGHT = (SCREEN_WIDTH * 9) / 16;
 const SEGMENT_HEIGHT = 56; // Approximate height of each segment row
+const AUTO_SCROLL_THROTTLE_MS = 900;
+const USER_SCROLL_HOLD_MS = 1800;
+
+function parseTimestampToSeconds(timestamp: string): number | null {
+  const hmsMatch = timestamp.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (hmsMatch) {
+    const hours = parseInt(hmsMatch[1], 10);
+    const minutes = parseInt(hmsMatch[2], 10);
+    const seconds = parseInt(hmsMatch[3], 10);
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  const msMatch = timestamp.match(/^(\d{1,2}):(\d{2})$/);
+  if (msMatch) {
+    const minutes = parseInt(msMatch[1], 10);
+    const seconds = parseInt(msMatch[2], 10);
+    return minutes * 60 + seconds;
+  }
+
+  return null;
+}
+
+function renderDescriptionWithTimestamps(
+  description: string,
+  onSeek: (seconds: number) => void
+): React.ReactNode {
+  const timestampRegex = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g;
+  const parts = description.split(timestampRegex);
+
+  return parts.map((part, index) => {
+    if (part && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(part)) {
+      const seconds = parseTimestampToSeconds(part);
+      if (seconds !== null) {
+        return (
+          <Text key={`ts-${index}`} style={styles.descriptionTimestamp} onPress={() => onSeek(seconds)}>
+            {part}
+          </Text>
+        );
+      }
+    }
+    return part;
+  });
+}
 
 export default function PlayerScreen() {
   const { id, start } = useLocalSearchParams<{ id: string; start?: string }>();
@@ -40,6 +85,13 @@ export default function PlayerScreen() {
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [isDownloadingTranscript, setIsDownloadingTranscript] = useState(false);
   const transcriptListRef = useRef<FlatList>(null);
+  const visibleTranscriptRangeRef = useRef<{ first: number; last: number }>({
+    first: -1,
+    last: -1,
+  });
+  const lastAutoScrollAtRef = useRef(0);
+  const lastAutoScrollIndexRef = useRef(-1);
+  const userInteractingUntilRef = useRef(0);
   const insets = useSafeAreaInsets();
   const watchAccumulatorRef = useRef(0);
   const lastPlaybackTimeRef = useRef(0);
@@ -47,6 +99,8 @@ export default function PlayerScreen() {
   const lastPersistedAtRef = useRef(0);
   const isPlayingRef = useRef(false);
   const initialSeekDoneRef = useRef(false);
+  const [videoDescription, setVideoDescription] = useState<string | null>(null);
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
   // Word definition lookup state
   const [selectedWord, setSelectedWord] = useState<string | null>(null);
@@ -108,7 +162,13 @@ export default function PlayerScreen() {
     lastPersistedAtRef.current = 0;
     isPlayingRef.current = false;
     initialSeekDoneRef.current = false;
+    visibleTranscriptRangeRef.current = { first: -1, last: -1 };
+    lastAutoScrollAtRef.current = 0;
+    lastAutoScrollIndexRef.current = -1;
+    userInteractingUntilRef.current = 0;
     setCurrentTime(0);
+    setVideoDescription(null);
+    setIsDescriptionExpanded(false);
   }, [id]);
 
   // Sync playlist index when video ID changes
@@ -126,6 +186,28 @@ export default function PlayerScreen() {
     () => streamServerUrl || serverUrl || null,
     [streamServerUrl, serverUrl]
   );
+
+  useEffect(() => {
+    if (!id || !effectiveServerUrl) return;
+
+    let cancelled = false;
+    api
+      .getVideoMeta(effectiveServerUrl, id)
+      .then((meta) => {
+        if (cancelled) return;
+        const normalizedDescription = meta.description?.trim();
+        setVideoDescription(normalizedDescription ? normalizedDescription : null);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.log("[Player] Failed to fetch description:", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, effectiveServerUrl]);
 
   // Fetch transcript from desktop when connected (always, even for local videos)
   useEffect(() => {
@@ -429,14 +511,24 @@ export default function PlayerScreen() {
     };
   }, [player, playlistId, hasNextVideo, playNext, persistWatchProgress, video]);
 
-  const handleSegmentPress = (segment: TranscriptSegment) => {
-    if (player) {
-      player.currentTime = segment.start;
-      setCurrentTime(segment.start);
-      lastPlaybackTimeRef.current = segment.start;
-      lastPositionRef.current = segment.start;
-    }
-  };
+  const seekToSeconds = useCallback(
+    (seconds: number) => {
+      if (!player) return;
+      const seekTime = Math.max(0, seconds);
+      player.currentTime = seekTime;
+      setCurrentTime(seekTime);
+      lastPlaybackTimeRef.current = seekTime;
+      lastPositionRef.current = seekTime;
+    },
+    [player]
+  );
+
+  const handleSegmentPress = useCallback(
+    (segment: TranscriptSegment) => {
+      seekToSeconds(segment.start);
+    },
+    [seekToSeconds]
+  );
 
   const handleBackPress = useCallback(() => {
     persistWatchProgress(lastPositionRef.current, true);
@@ -477,67 +569,102 @@ export default function PlayerScreen() {
 
   const currentSegmentIndex = getCurrentSegmentIndex();
 
-  // Debug: log time updates
-  useEffect(() => {
-    if (currentTime > 0) {
-      console.log(
-        `[Player] time=${currentTime.toFixed(1)}s, segment=${currentSegmentIndex}, playing=${isPlaying}`
-      );
+  const markUserScrolling = useCallback(() => {
+    userInteractingUntilRef.current = Date.now() + USER_SCROLL_HOLD_MS;
+  }, []);
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 45,
+  }).current;
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      const indexes = viewableItems
+        .map((item) => (typeof item.index === "number" ? item.index : -1))
+        .filter((index) => index >= 0);
+
+      if (indexes.length === 0) return;
+
+      visibleTranscriptRangeRef.current = {
+        first: Math.min(...indexes),
+        last: Math.max(...indexes),
+      };
     }
-  }, [Math.floor(currentTime), currentSegmentIndex, isPlaying]);
+  ).current;
 
-  // Auto-scroll transcript
+  // Smarter transcript follow mode: only scroll when needed and not while user is manually scrolling.
   useEffect(() => {
-    if (currentSegmentIndex >= 0 && transcriptListRef.current) { // Removed isPlaying from condition
-      try { // Added try-catch
-        transcriptListRef.current.scrollToIndex({
-          index: currentSegmentIndex,
-          animated: true,
-          viewPosition: 0.3,
-        });
-      } catch {
-        // Ignore scroll errors
-      }
+    if (!isPlaying || currentSegmentIndex < 0 || !transcriptListRef.current) return;
+    if (Date.now() < userInteractingUntilRef.current) return;
+
+    const { first, last } = visibleTranscriptRangeRef.current;
+    const isRangeKnown = first >= 0 && last >= first;
+    const visibilityBuffer = 1;
+    const isCurrentLineVisible =
+      isRangeKnown &&
+      currentSegmentIndex >= first + visibilityBuffer &&
+      currentSegmentIndex <= last - visibilityBuffer;
+
+    if (isCurrentLineVisible) return;
+
+    const now = Date.now();
+    if (
+      now - lastAutoScrollAtRef.current < AUTO_SCROLL_THROTTLE_MS &&
+      Math.abs(currentSegmentIndex - lastAutoScrollIndexRef.current) < 2
+    ) {
+      return;
     }
-  }, [currentSegmentIndex]); // Removed isPlaying from dependencies
 
-  const ITEM_HEIGHT = 56; // Defined ITEM_HEIGHT
-  const getItemLayout = (_: unknown, index: number) => ({
-    length: ITEM_HEIGHT, // Used ITEM_HEIGHT
-    offset: ITEM_HEIGHT * index, // Used ITEM_HEIGHT
-    index,
-  });
+    try {
+      transcriptListRef.current.scrollToIndex({
+        index: currentSegmentIndex,
+        animated: true,
+        viewPosition: 0.45,
+      });
+      lastAutoScrollAtRef.current = now;
+      lastAutoScrollIndexRef.current = currentSegmentIndex;
+    } catch {
+      // Ignore - onScrollToIndexFailed handles retries.
+    }
+  }, [currentSegmentIndex, isPlaying]);
 
-  const handleScrollToIndexFailed = (info: {
-    index: number;
-    highestMeasuredFrameIndex: number;
-    averageItemLength: number; // Kept original type for safety, though not used in snippet
-  }) => {
-    const wait = new Promise<void>((resolve) => setTimeout(resolve, 100)); // Changed to Promise
-    wait.then(() => {
-      if (transcriptListRef.current && info.index >= 0) {
-        try { // Added try-catch
+  const handleScrollToIndexFailed = useCallback(
+    (info: {
+      index: number;
+      highestMeasuredFrameIndex: number;
+      averageItemLength: number;
+    }) => {
+      if (!transcriptListRef.current || info.index < 0) return;
+
+      const fallbackOffset = Math.max(0, info.averageItemLength * info.index - info.averageItemLength);
+      transcriptListRef.current.scrollToOffset({ offset: fallbackOffset, animated: true });
+
+      setTimeout(() => {
+        if (!transcriptListRef.current) return;
+        try {
           transcriptListRef.current.scrollToIndex({
-            index: Math.min(info.index, info.highestMeasuredFrameIndex), // Adjusted index calculation
+            index: Math.min(info.index, info.highestMeasuredFrameIndex),
             animated: true,
+            viewPosition: 0.45,
           });
         } catch {
-          // Ignore
+          // Ignore retry errors.
         }
-      }
-    });
-  };
+      }, 120);
+    },
+    []
+  );
 
   // Render tappable words in a segment
   const renderTappableSegment = useCallback(
-    (text: string, segmentStart: number) => {
+    (text: string, segmentStart: number, isActive: boolean) => {
       if (!isConnectedToDesktop) {
-        return <Text style={styles.segmentText}>{text}</Text>;
+        return <Text style={[styles.segmentText, isActive && styles.segmentTextActive]}>{text}</Text>;
       }
 
       const words = text.split(/(\s+)/);
       return (
-        <Text style={styles.segmentText}>
+        <Text style={[styles.segmentText, isActive && styles.segmentTextActive]}>
           {words.map((word, i) => {
             if (/^\s+$/.test(word)) {
               return word; // Return whitespace as-is
@@ -545,7 +672,7 @@ export default function PlayerScreen() {
             return (
               <Text
                 key={i}
-                style={styles.tappableWord}
+                style={[styles.tappableWord, isActive && styles.tappableWordActive]}
                 onPress={() => handleWordPress(word, segmentStart)}
               >
                 {word}
@@ -585,7 +712,7 @@ export default function PlayerScreen() {
             <Text style={styles.backButtonText}>← Back</Text>
           </Pressable>
           {playlistId && (
-            <View style={styles.playlistControls}> {/* Kept playlistControls, assuming navButtons was a typo */}
+            <View style={styles.playlistControls}>
               <Pressable
                 style={[
                   styles.navButton,
@@ -648,6 +775,29 @@ export default function PlayerScreen() {
         </View>
       </View>
 
+      {videoDescription && (
+        <View style={styles.descriptionContainer}>
+          <Pressable
+            style={styles.descriptionToggle}
+            onPress={() => setIsDescriptionExpanded((prev) => !prev)}
+          >
+            <Text style={styles.descriptionToggleLabel}>Video Description</Text>
+            <Text style={styles.descriptionToggleIcon}>{isDescriptionExpanded ? "▾" : "▸"}</Text>
+          </Pressable>
+
+          {isDescriptionExpanded && (
+            <View style={styles.descriptionBody}>
+              <Text style={styles.descriptionHint}>Tap a timestamp to seek</Text>
+              <ScrollView style={styles.descriptionScroll} nestedScrollEnabled>
+                <Text style={styles.descriptionText}>
+                  {renderDescriptionWithTimestamps(videoDescription, seekToSeconds)}
+                </Text>
+              </ScrollView>
+            </View>
+          )}
+        </View>
+      )}
+
       {isLoadingTranscript ? (
         <View style={[styles.noTranscript, { paddingBottom: insets.bottom }]}>
           <Text style={styles.noTranscriptText}>Loading transcript...</Text>
@@ -664,8 +814,12 @@ export default function PlayerScreen() {
             ref={transcriptListRef}
             data={transcript.segments}
             keyExtractor={(_, index) => index.toString()}
-            getItemLayout={getItemLayout}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
             onScrollToIndexFailed={handleScrollToIndexFailed}
+            onScrollBeginDrag={markUserScrolling}
+            onMomentumScrollBegin={markUserScrolling}
+            onMomentumScrollEnd={markUserScrolling}
             contentContainerStyle={{ paddingBottom: insets.bottom }}
             initialNumToRender={20}
             maxToRenderPerBatch={10}
@@ -682,7 +836,7 @@ export default function PlayerScreen() {
                   {formatTime(item.start)}
                 </Text>
                 <View style={{ flex: 1 }}>
-                  {renderTappableSegment(item.text, item.start)}
+                  {renderTappableSegment(item.text, item.start, index === currentSegmentIndex)}
                 </View>
               </Pressable>
             )}
@@ -850,6 +1004,53 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#1a1a2e",
   },
+  descriptionContainer: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#1a1a2e",
+    backgroundColor: "#11152b",
+  },
+  descriptionToggle: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  descriptionToggleLabel: {
+    color: "#c6d0f5",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  descriptionToggleIcon: {
+    color: "#8f9cc7",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  descriptionBody: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  descriptionHint: {
+    color: "#7a86b1",
+    fontSize: 11,
+    marginBottom: 6,
+  },
+  descriptionScroll: {
+    maxHeight: 180,
+    backgroundColor: "#0f1328",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  descriptionText: {
+    color: "#a8b1d1",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  descriptionTimestamp: {
+    color: "#86b7ff",
+    textDecorationLine: "underline",
+  },
   title: {
     color: "#fff",
     fontSize: 16,
@@ -928,6 +1129,9 @@ const styles = StyleSheet.create({
     color: "#a0a0a0",
     fontSize: 14,
     lineHeight: 20,
+  },
+  tappableWordActive: {
+    color: "#fff",
   },
   noTranscript: {
     flex: 1,

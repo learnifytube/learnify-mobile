@@ -11,7 +11,7 @@ const config = getSentryExpoConfig(__dirname);
 // This fixes the @expo/log-box incorrectly importing web dependencies
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (
-    (platform === "android" || platform === "ios") &&
+    platform === "android" &&
     moduleName === "react-dom/client"
   ) {
     return {

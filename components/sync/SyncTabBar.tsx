@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
 import type { BrowseTab } from "../../types";
 import { colors, radius, spacing, fontSize, fontWeight } from "../../theme";
 
@@ -12,54 +12,48 @@ export function SyncTabBar({ activeTab, onTabChange }: SyncTabBarProps) {
     { key: "mylists", label: "My Lists" },
     { key: "channels", label: "Channels" },
     { key: "playlists", label: "Playlists" },
-    { key: "subscriptions", label: "Subscriptions" },
+    { key: "subscriptions", label: "Subs" },
   ];
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.key;
-          return (
-            <Pressable
-              key={tab.key}
-              style={[styles.tab, isActive && styles.activeTab]}
-              onPress={() => onTabChange(tab.key)}
-            >
-              <Text style={[styles.tabText, isActive && styles.activeTabText]}>
-                {tab.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {tabs.map((tab) => {
+        const isActive = activeTab === tab.key;
+        return (
+          <Pressable
+            key={tab.key}
+            style={[styles.tab, isActive && styles.activeTab]}
+            onPress={() => onTabChange(tab.key)}
+          >
+            <Text style={[styles.tabText, isActive && styles.activeTabText]}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flexDirection: "row",
     backgroundColor: colors.background,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingTop: spacing.sm,
-  },
-  scrollContent: {
-    paddingHorizontal: spacing.sm + 4,
-    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.xs,
   },
   tab: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 10,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    marginHorizontal: 2,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
   },
   activeTab: {
-    backgroundColor: colors.muted,
+    borderBottomColor: colors.primary,
   },
   tabText: {
     color: colors.textTertiary,

@@ -138,6 +138,7 @@ export default function FlashcardsScreen() {
 
     return (
       <FlatList
+        style={{ flex: 1 }}
         data={savedWords}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.wordsList}
@@ -333,7 +334,7 @@ export default function FlashcardsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.modeTabs}>
         <Pressable
           style={[styles.modeTab, mode === "flashcards" && styles.modeTabActive]}

@@ -48,6 +48,7 @@ export function ChannelList({
 
   return (
     <FlatList
+      style={styles.flexList}
       data={channels}
       keyExtractor={(item) => item.channelId}
       numColumns={2}
@@ -64,6 +65,9 @@ export function ChannelList({
 }
 
 const styles = StyleSheet.create({
+  flexList: {
+    flex: 1,
+  },
   centered: {
     flex: 1,
     justifyContent: "center",

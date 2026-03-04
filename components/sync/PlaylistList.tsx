@@ -54,6 +54,7 @@ export function PlaylistList({
 
   return (
     <FlatList
+      style={styles.flexList}
       data={playlists}
       keyExtractor={(item) => item.playlistId}
       renderItem={({ item }) => (
@@ -73,6 +74,9 @@ export function PlaylistList({
 }
 
 const styles = StyleSheet.create({
+  flexList: {
+    flex: 1,
+  },
   centered: {
     flex: 1,
     justifyContent: "center",

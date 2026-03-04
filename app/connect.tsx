@@ -16,6 +16,10 @@ import { api } from "../services/api";
 import { useLibraryStore } from "../stores/library";
 import { useDownloadStore } from "../stores/downloads";
 import { startScanning, stopScanning } from "../services/p2p/discovery";
+import {
+  assertSyncCompatibility,
+  SyncCompatibilityError,
+} from "../services/sync-compatibility";
 import type { RemoteVideo, DiscoveredPeer } from "../types";
 
 const DEFAULT_SYNC_PORT = 53318;
@@ -93,7 +97,7 @@ export default function ConnectScreen() {
   const [discoveredDevices, setDiscoveredDevices] = useState<DiscoveredPeer[]>([]);
   const [isScanning, setIsScanning] = useState(false);
 
-  const { setServerUrl } = useConnectionStore();
+  const { setServerUrl, setServerName } = useConnectionStore();
   const { addVideo } = useLibraryStore();
   const queueDownload = useDownloadStore((state) => state.queueDownload);
 
@@ -130,6 +134,15 @@ export default function ConnectScreen() {
     };
   }, []);
 
+  const showCompatibilityAlert = (error: SyncCompatibilityError): void => {
+    if (error.issue === "desktop_update_required") {
+      Alert.alert("Desktop Update Required", error.message);
+      return;
+    }
+
+    Alert.alert("Mobile Update Required", error.message);
+  };
+
   const handleConnectToDevice = async (device: DiscoveredPeer) => {
     const candidateUrls = buildDiscoveredConnectUrls(device);
     console.log(
@@ -145,9 +158,11 @@ export default function ConnectScreen() {
         try {
           console.log("[Connect] Trying discovered URL:", url);
           const info = await api.getInfo(url);
+          assertSyncCompatibility(info);
           console.log("[Connect] Connected to:", info.name, "via", url);
 
           setServerUrl(url);
+          setServerName(info.name);
           const videosResponse = await api.getVideos(url);
           console.log("[Connect] Got", videosResponse.videos.length, "videos");
           setRemoteVideos(videosResponse.videos);
@@ -158,6 +173,9 @@ export default function ConnectScreen() {
             console.log("[Connect] Connection aborted (user navigated away)");
             return;
           }
+          if (error instanceof SyncCompatibilityError) {
+            throw error;
+          }
           lastError = error;
           console.warn("[Connect] Discovered connection attempt failed:", url, error);
         }
@@ -165,6 +183,10 @@ export default function ConnectScreen() {
 
       throw lastError ?? new Error("All discovered connection attempts failed");
     } catch (error) {
+      if (error instanceof SyncCompatibilityError) {
+        showCompatibilityAlert(error);
+        return;
+      }
       console.error("[Connect] Connection failed:", error);
       const reason = getErrorMessage(error);
       Alert.alert(
@@ -191,9 +213,11 @@ export default function ConnectScreen() {
         try {
           console.log("[Connect] Trying manual connection:", url);
           const info = await api.getInfo(url);
+          assertSyncCompatibility(info);
           console.log("[Connect] Connected to:", info.name, "via", url);
 
           setServerUrl(url);
+          setServerName(info.name);
           const videosResponse = await api.getVideos(url);
           setRemoteVideos(videosResponse.videos);
           return;
@@ -203,6 +227,9 @@ export default function ConnectScreen() {
             console.log("[Connect] Connection aborted (user navigated away)");
             return;
           }
+          if (error instanceof SyncCompatibilityError) {
+            throw error;
+          }
           lastError = error;
           console.warn("[Connect] Manual connection attempt failed:", url, error);
         }
@@ -210,6 +237,10 @@ export default function ConnectScreen() {
 
       throw lastError ?? new Error("All manual connection attempts failed");
     } catch (error) {
+      if (error instanceof SyncCompatibilityError) {
+        showCompatibilityAlert(error);
+        return;
+      }
       const reason = getErrorMessage(error);
       Alert.alert(
         "Connection Failed",
@@ -276,7 +307,7 @@ export default function ConnectScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <View style={styles.content}>
         {remoteVideos.length === 0 ? (
           <>

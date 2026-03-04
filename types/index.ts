@@ -39,6 +39,9 @@ export interface ServerInfo {
   name: string;
   version: string;
   videoCount: number;
+  // Optional for legacy desktop builds that predate protocol negotiation.
+  syncProtocolVersion?: number;
+  minSupportedMobileSyncProtocolVersion?: number;
 }
 
 export interface VideoMeta {
@@ -46,6 +49,7 @@ export interface VideoMeta {
   title: string;
   channelTitle: string;
   duration: number;
+  description?: string | null;
   transcript?: Transcript;
   // Multiple transcripts from server
   transcripts?: Transcript[];

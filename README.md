@@ -155,7 +155,7 @@ npm run release:android
 
 ```bash
 # Generate native projects
-npx expo prebuild
+npx expo prebuild --platform android
 
 # Build Android APK
 cd android && ./gradlew assembleRelease

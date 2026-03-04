@@ -20,6 +20,15 @@ interface VideoCardProps {
   style?: StyleProp<ViewStyle>;
 }
 
+function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
 export function VideoCard({ video, style }: VideoCardProps) {
   const download = useDownloadStore((state) =>
     state.queue.find((d) => d.videoId === video.id)
@@ -38,100 +47,81 @@ export function VideoCard({ video, style }: VideoCardProps) {
     downloadManager.retry(video.id);
   };
 
-  const content = (
-    <Pressable
-      style={StyleSheet.flatten([
-        styles.container,
-        !isDownloaded && styles.containerDisabled,
-        style,
-      ])}
-      disabled={!isDownloaded}
-    >
-      <View style={styles.thumbnailContainer}>
-        {video.thumbnailUrl ? (
-          <Image
-            source={{ uri: video.thumbnailUrl }}
-            style={styles.thumbnail}
-            resizeMode="cover"
-          />
-        ) : (
-          <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
-            <Film size={32} color={colors.mutedForeground} />
-          </View>
-        )}
-        <View style={styles.durationBadge}>
-          <Text style={styles.durationText}>
-            {formatDuration(video.duration)}
-          </Text>
-        </View>
-        {isQueued && (
-          <View style={styles.pendingOverlay}>
-            <Text style={styles.pendingText}>Queued</Text>
-          </View>
-        )}
-        {isDownloading && (
-          <View style={styles.progressOverlay}>
-            <View
-              style={[
-                styles.progressBar,
-                { width: `${download?.progress || 0}%` },
-              ]}
+  return (
+    <Link href={`/player/${video.id}`} asChild>
+      <Pressable
+        style={StyleSheet.flatten([styles.container, style])}
+      >
+        <View style={styles.thumbnailContainer}>
+          {video.thumbnailUrl ? (
+            <Image
+              source={{ uri: video.thumbnailUrl }}
+              style={styles.thumbnail}
+              resizeMode="cover"
             />
-            <Text style={styles.progressText}>{download?.progress || 0}%</Text>
-          </View>
-        )}
-        {isFailed && (
-          <View style={styles.failedBadge}>
-            <AlertCircle size={12} color={colors.foreground} />
-          </View>
-        )}
-        {isDownloaded && !download && (
-          <View style={styles.downloadedBadge}>
-            <Check size={12} color={colors.foreground} strokeWidth={3} />
-          </View>
-        )}
-      </View>
-      <View style={styles.info}>
-        <Text style={styles.title} numberOfLines={2}>
-          {video.title}
-        </Text>
-        <Text style={styles.channel} numberOfLines={1}>
-          {video.channelTitle}
-        </Text>
-        {(isDownloading || isQueued) && (
-          <Pressable style={styles.cancelButton} onPress={handleCancel}>
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </Pressable>
-        )}
-        {isFailed && (
-          <View style={styles.failedActions}>
-            <Text style={styles.errorText} numberOfLines={1}>
-              {download?.error || "Failed"}
+          ) : (
+            <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
+              <Film size={24} color={colors.mutedForeground} />
+            </View>
+          )}
+          <View style={styles.durationBadge}>
+            <Text style={styles.durationText}>
+              {formatDuration(video.duration)}
             </Text>
-            <Pressable style={styles.retryButton} onPress={handleRetry}>
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </Pressable>
           </View>
-        )}
-      </View>
-    </Pressable>
+          {isQueued && (
+            <View style={styles.pendingOverlay}>
+              <Text style={styles.pendingText}>Queued</Text>
+            </View>
+          )}
+          {isDownloading && (
+            <View style={styles.progressOverlay}>
+              <View
+                style={[
+                  styles.progressBar,
+                  { width: `${download?.progress || 0}%` },
+                ]}
+              />
+              <Text style={styles.progressText}>{download?.progress || 0}%</Text>
+            </View>
+          )}
+          {isFailed && (
+            <View style={styles.failedBadge}>
+              <AlertCircle size={12} color={colors.foreground} />
+            </View>
+          )}
+          {isDownloaded && !download && (
+            <View style={styles.downloadedBadge}>
+              <Check size={12} color={colors.foreground} strokeWidth={3} />
+            </View>
+          )}
+        </View>
+        <View style={styles.info}>
+          <Text style={styles.title} numberOfLines={2}>
+            {video.title}
+          </Text>
+          <Text style={styles.channel} numberOfLines={1}>
+            {video.channelTitle}
+          </Text>
+          {(isDownloading || isQueued) && (
+            <Pressable style={styles.cancelButton} onPress={handleCancel}>
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </Pressable>
+          )}
+          {isFailed && (
+            <View style={styles.failedActions}>
+              <Text style={styles.errorText} numberOfLines={1}>
+                {download?.error || "Failed"}
+              </Text>
+              <Pressable style={styles.retryButton} onPress={handleRetry}>
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </Pressable>
+    </Link>
   );
-
-  if (isDownloaded) {
-    return (
-      <Link href={`/player/${video.id}`} asChild>
-        {content}
-      </Link>
-    );
-  }
-
-  return content;
-}
-
-function formatDuration(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 const styles = StyleSheet.create({
@@ -139,9 +129,6 @@ const styles = StyleSheet.create({
     flex: 1,
     margin: spacing.sm,
     maxWidth: "50%",
-  },
-  containerDisabled: {
-    opacity: 0.6,
   },
   thumbnailContainer: {
     aspectRatio: 16 / 9,
@@ -162,14 +149,14 @@ const styles = StyleSheet.create({
     bottom: 4,
     right: 4,
     backgroundColor: colors.overlay,
-    paddingHorizontal: 4,
+    paddingHorizontal: 5,
     paddingVertical: 2,
     borderRadius: radius.sm,
   },
   durationText: {
     color: colors.foreground,
     fontSize: fontSize.xs,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.semibold,
   },
   progressOverlay: {
     position: "absolute",
@@ -232,21 +219,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   info: {
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs + 2,
   },
   title: {
     color: colors.foreground,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.semibold,
     marginBottom: 2,
+    lineHeight: 16,
   },
   channel: {
     color: colors.mutedForeground,
-    fontSize: 11,
+    fontSize: fontSize.xs,
   },
   cancelButton: {
     marginTop: 6,
-    paddingVertical: 4,
+    paddingVertical: 3,
     paddingHorizontal: 8,
     backgroundColor: `${colors.destructive}33`,
     borderRadius: radius.sm,
@@ -266,7 +254,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   retryButton: {
-    paddingVertical: 4,
+    paddingVertical: 3,
     paddingHorizontal: 8,
     backgroundColor: `${colors.primary}33`,
     borderRadius: radius.sm,

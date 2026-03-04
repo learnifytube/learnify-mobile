@@ -47,7 +47,7 @@ export default function ListsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       {videos.length === 0 && savedPlaylists.length === 0 ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyIcon}>📚</Text>
@@ -55,7 +55,7 @@ export default function ListsScreen() {
           <Text style={styles.emptyText}>
             Sync videos from your LearnifyTube desktop app
           </Text>
-          <Link href="/connect" asChild>
+          <Link href="/(tabs)/settings" asChild>
             <Pressable style={styles.syncButton}>
               <Text style={styles.syncButtonText}>Sync Videos</Text>
             </Pressable>
@@ -102,11 +102,10 @@ export default function ListsScreen() {
                           style={[
                             styles.playlistProgressFill,
                             {
-                              width: `${
-                                playlist.totalCount > 0
-                                  ? (playlist.downloadedCount / playlist.totalCount) * 100
-                                  : 0
-                              }%`,
+                              width: `${playlist.totalCount > 0
+                                ? (playlist.downloadedCount / playlist.totalCount) * 100
+                                : 0
+                                }%`,
                             },
                           ]}
                         />
@@ -151,7 +150,11 @@ export default function ListsScreen() {
           {videos.length > 0 && (
             <View style={styles.videosGrid}>
               {videos.map((video) => (
-                <VideoCard key={video.id} video={video} />
+                <VideoCard
+                  key={video.id}
+                  video={video}
+                  style={styles.downloadedVideoCard}
+                />
               ))}
             </View>
           )}
@@ -269,7 +272,16 @@ const styles = StyleSheet.create({
   videosGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    padding: 8,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    justifyContent: "space-between",
+  },
+  downloadedVideoCard: {
+    flex: 0,
+    width: "48%",
+    maxWidth: "48%",
+    margin: 0,
+    marginBottom: 10,
   },
   emptyState: {
     flex: 1,

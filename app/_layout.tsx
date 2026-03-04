@@ -136,7 +136,7 @@ export default Sentry.wrap(function RootLayout() {
             name="share"
             options={{
               title: "Share",
-              headerShown: true,
+              headerShown: false,
               presentation: "modal",
               headerStyle: {
                 backgroundColor: colors.card,
@@ -148,7 +148,7 @@ export default Sentry.wrap(function RootLayout() {
             name="connect"
             options={{
               title: "Sync Videos",
-              headerShown: true,
+              headerShown: false,
               presentation: "modal",
               headerStyle: {
                 backgroundColor: colors.card,
@@ -160,7 +160,7 @@ export default Sentry.wrap(function RootLayout() {
             name="sync"
             options={{
               title: "Browse Server",
-              headerShown: true,
+              headerShown: false,
               presentation: "modal",
               headerStyle: {
                 backgroundColor: colors.card,

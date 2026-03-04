@@ -7,7 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Development
 npm start              # Start Expo dev server
-npm run ios            # Run on iOS Simulator
 npm run android        # Run on Android Emulator
 
 # Code quality
@@ -70,7 +69,7 @@ The download system uses a queue-based architecture:
 - Downloads fetch all available transcripts (multiple languages) from the desktop server
 
 **Important: Video Path Resolution**
-- iOS sandbox container paths change when the app is reinstalled or updated
+- App sandbox container paths can change when the app is reinstalled or updated
 - Never use stored `localPath` directly for playback - use `getVideoLocalPath(videoId)` from `services/downloader.ts`
 - Use `videoExistsLocally(videoId)` to check if a video file exists locally
 - The `localPath` in the database is kept for backwards compatibility but should not be trusted

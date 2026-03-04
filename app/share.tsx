@@ -255,7 +255,7 @@ export default function ShareScreen() {
   // Mode selection view
   if (viewMode === "select") {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
         <View style={styles.content}>
           <Text style={styles.title}>P2P Video Sharing</Text>
           <Text style={styles.subtitle}>
@@ -277,7 +277,7 @@ export default function ShareScreen() {
   // Share mode view
   if (viewMode === "share") {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
         <View style={styles.content}>
           <View style={styles.header}>
             <Pressable onPress={handleBack} style={styles.backButton}>
@@ -324,7 +324,7 @@ export default function ShareScreen() {
 
   // Receive mode view
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <View style={styles.content}>
         {!selectedPeer && (
           <View style={styles.header}>

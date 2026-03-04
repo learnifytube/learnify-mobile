@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   View,
@@ -5,27 +6,314 @@ import {
   FlatList,
   Pressable,
   StyleSheet,
-  Image,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useState, useEffect } from "react";
+import { VideoGridCard } from "../../components/VideoGridCard";
 import { getSavedPlaylistWithItems } from "../../db/repositories/playlists";
 import type { SavedPlaylistWithItems } from "../../db/repositories/playlists";
+import { api } from "../../services/api";
+import { downloadManager } from "../../services/downloadManager";
+import { getVideoLocalPath, videoExistsLocally } from "../../services/downloader";
+import { useConnectionStore } from "../../stores/connection";
+import { useDownloadStore } from "../../stores/downloads";
+import { useLibraryStore } from "../../stores/library";
+import { usePlaybackStore, type StreamingVideo } from "../../stores/playback";
+
+type SavedPlaylistItem = SavedPlaylistWithItems["items"][number];
+type CardPendingState =
+  | { type: "none" }
+  | { type: "preparing"; label?: string }
+  | { type: "downloading"; progress: number }
+  | { type: "queued" }
+  | { type: "failed"; error?: string };
+
+const PREPARE_CANCELLED_MESSAGE = "Download cancelled";
 
 export default function SavedPlaylistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const serverUrl = useConnectionStore((state) => state.serverUrl);
+  const libraryVideos = useLibraryStore((state) => state.videos);
+  const queueDownload = useDownloadStore((state) => state.queueDownload);
+  const downloadQueue = useDownloadStore((state) => state.queue);
+  const startPlaylist = usePlaybackStore((state) => state.startPlaylist);
+
   const [playlist, setPlaylist] = useState<SavedPlaylistWithItems | null>(null);
   const [loading, setLoading] = useState(true);
+  const [preparingVideoIds, setPreparingVideoIds] = useState<Set<string>>(new Set());
+
+  const isMountedRef = useRef(true);
+  const cancelledVideoIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (id) {
-      const data = getSavedPlaylistWithItems(id);
-      setPlaylist(data ?? null);
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const playlistParamId = Array.isArray(id) ? id[0] : id;
+
+  useEffect(() => {
+    if (!playlistParamId) {
+      setPlaylist(null);
       setLoading(false);
+      return;
     }
-  }, [id]);
+
+    const data = getSavedPlaylistWithItems(playlistParamId);
+    setPlaylist(data ?? null);
+    setLoading(false);
+  }, [playlistParamId]);
+
+  const localPathByVideoId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const video of libraryVideos) {
+      if (video.localPath) {
+        map.set(video.id, video.localPath);
+      }
+    }
+    return map;
+  }, [libraryVideos]);
+
+  const setPreparingVideo = useCallback((videoId: string, isPreparing: boolean) => {
+    setPreparingVideoIds((prev) => {
+      const next = new Set(prev);
+      if (isPreparing) {
+        next.add(videoId);
+      } else {
+        next.delete(videoId);
+      }
+      return next;
+    });
+  }, []);
+
+  const sleep = useCallback(
+    (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+    []
+  );
+
+  const waitForServerDownload = useCallback(
+    async (videoId: string, shouldAbort: () => boolean) => {
+      if (!serverUrl) throw new Error("Not connected to server");
+      const timeoutMs = 10 * 60 * 1000;
+      const intervalMs = 2000;
+      const start = Date.now();
+
+      while (Date.now() - start < timeoutMs) {
+        if (shouldAbort()) throw new Error(PREPARE_CANCELLED_MESSAGE);
+
+        const status = await api.getServerDownloadStatus(serverUrl, videoId);
+        if (status.status === "completed") return;
+        if (status.status === "failed") {
+          throw new Error(status.error || "Server download failed");
+        }
+
+        await sleep(intervalMs);
+      }
+
+      throw new Error("Server download timed out");
+    },
+    [serverUrl, sleep]
+  );
+
+  const waitForLocalVideo = useCallback(
+    async (videoId: string, shouldAbort: () => boolean) => {
+      const timeoutMs = 10 * 60 * 1000;
+      const intervalMs = 1000;
+      const start = Date.now();
+      let wasQueued = false;
+
+      while (Date.now() - start < timeoutMs) {
+        if (videoExistsLocally(videoId)) return;
+        if (shouldAbort()) throw new Error(PREPARE_CANCELLED_MESSAGE);
+
+        const item = useDownloadStore.getState().getDownload(videoId);
+        if (item) {
+          wasQueued = true;
+          if (item.status === "failed") {
+            throw new Error(item.error || "Mobile download failed");
+          }
+        } else if (wasQueued) {
+          throw new Error(PREPARE_CANCELLED_MESSAGE);
+        }
+
+        await sleep(intervalMs);
+      }
+
+      throw new Error("Sync to mobile timed out");
+    },
+    [sleep]
+  );
+
+  const playSavedPlaylistVideo = useCallback(
+    (item: SavedPlaylistItem) => {
+      if (!playlist) return;
+
+      const localPath =
+        localPathByVideoId.get(item.videoId) ?? getVideoLocalPath(item.videoId) ?? undefined;
+
+      if (!serverUrl && !localPath) {
+        Alert.alert(
+          "Offline mode",
+          "Reconnect to desktop to stream or sync this video."
+        );
+        return;
+      }
+
+      const allPlaylistVideos: StreamingVideo[] = playlist.items.map((videoItem) => ({
+        id: videoItem.videoId,
+        title: videoItem.title,
+        channelTitle: videoItem.channelTitle,
+        duration: videoItem.duration,
+        thumbnailUrl: videoItem.thumbnailUrl ?? undefined,
+        localPath:
+          localPathByVideoId.get(videoItem.videoId) ??
+          getVideoLocalPath(videoItem.videoId) ??
+          undefined,
+      }));
+
+      const playableVideos = serverUrl
+        ? allPlaylistVideos
+        : allPlaylistVideos.filter((video) => !!video.localPath);
+
+      const startIndex = playableVideos.findIndex((video) => video.id === item.videoId);
+      if (startIndex < 0) {
+        Alert.alert(
+          "Offline mode",
+          "This video is not downloaded on mobile yet."
+        );
+        return;
+      }
+
+      startPlaylist(
+        `saved-${playlist.id}`,
+        playlist.title,
+        playableVideos,
+        startIndex,
+        serverUrl ?? undefined
+      );
+      router.push(`/player/${item.videoId}`);
+    },
+    [playlist, localPathByVideoId, serverUrl, startPlaylist, router]
+  );
+
+  const handleVideoPress = useCallback(
+    async (item: SavedPlaylistItem) => {
+      const alreadyLocal =
+        localPathByVideoId.has(item.videoId) || videoExistsLocally(item.videoId);
+
+      if (alreadyLocal) {
+        playSavedPlaylistVideo(item);
+        return;
+      }
+
+      if (!serverUrl) {
+        Alert.alert(
+          "Offline mode",
+          "Reconnect to desktop to stream or sync this video."
+        );
+        return;
+      }
+
+      const existingDownload = useDownloadStore.getState().getDownload(item.videoId);
+      if (
+        existingDownload &&
+        (existingDownload.status === "queued" || existingDownload.status === "downloading")
+      ) {
+        return;
+      }
+
+      if (preparingVideoIds.has(item.videoId)) return;
+
+      cancelledVideoIdsRef.current.delete(item.videoId);
+      setPreparingVideo(item.videoId, true);
+
+      const shouldAbort = () =>
+        !isMountedRef.current || cancelledVideoIdsRef.current.has(item.videoId);
+
+      try {
+        const response = await api.requestServerDownload(serverUrl, { videoId: item.videoId });
+        if (!response.success && !response.status) {
+          throw new Error(response.message || "Server refused download request");
+        }
+
+        await waitForServerDownload(item.videoId, shouldAbort);
+
+        if (!videoExistsLocally(item.videoId)) {
+          queueDownload(item.videoId, {
+            title: item.title,
+            channelTitle: item.channelTitle,
+            duration: item.duration,
+            thumbnailUrl: item.thumbnailUrl ?? undefined,
+          });
+
+          await waitForLocalVideo(item.videoId, shouldAbort);
+        }
+
+        if (!shouldAbort()) {
+          playSavedPlaylistVideo(item);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to prepare video";
+        if (message === PREPARE_CANCELLED_MESSAGE) {
+          return;
+        }
+        if (isMountedRef.current) {
+          Alert.alert("Unable to play video", message);
+        }
+      } finally {
+        cancelledVideoIdsRef.current.delete(item.videoId);
+        if (isMountedRef.current) {
+          setPreparingVideo(item.videoId, false);
+        }
+      }
+    },
+    [
+      localPathByVideoId,
+      playSavedPlaylistVideo,
+      preparingVideoIds,
+      queueDownload,
+      serverUrl,
+      setPreparingVideo,
+      waitForLocalVideo,
+      waitForServerDownload,
+    ]
+  );
+
+  const handleCancelVideo = useCallback(
+    (videoId: string) => {
+      cancelledVideoIdsRef.current.add(videoId);
+      setPreparingVideo(videoId, false);
+      downloadManager.cancel(videoId);
+    },
+    [setPreparingVideo]
+  );
+
+  const getPendingState = useCallback(
+    (videoId: string): CardPendingState => {
+      if (preparingVideoIds.has(videoId)) {
+        return { type: "preparing", label: "Preparing..." };
+      }
+
+      const item = downloadQueue.find((download) => download.videoId === videoId);
+      if (!item) return { type: "none" };
+
+      if (item.status === "queued") return { type: "queued" };
+      if (item.status === "downloading") {
+        return { type: "downloading", progress: item.progress };
+      }
+      if (item.status === "failed") return { type: "failed", error: item.error };
+
+      return { type: "none" };
+    },
+    [downloadQueue, preparingVideoIds]
+  );
 
   if (loading) {
     return (
@@ -50,18 +338,15 @@ export default function SavedPlaylistScreen() {
     );
   }
 
-  const downloadedCount = playlist.items.filter((i) => i.isDownloaded).length;
+  const downloadedCount = playlist.items.filter(
+    (item) =>
+      localPathByVideoId.has(item.videoId) || videoExistsLocally(item.videoId)
+  ).length;
   const totalCount = playlist.items.length;
-
-  const handleVideoPress = (item: SavedPlaylistWithItems["items"][0]) => {
-    if (item.isDownloaded) {
-      router.push(`/player/${item.videoId}`);
-    }
-  };
+  const downloadPercent = totalCount > 0 ? (downloadedCount / totalCount) * 100 : 0;
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      {/* Header */}
       <View style={styles.header}>
         <Pressable style={styles.headerBackButton} onPress={() => router.back()}>
           <Text style={styles.headerBackIcon}>←</Text>
@@ -76,83 +361,52 @@ export default function SavedPlaylistScreen() {
         </View>
       </View>
 
-      {/* Progress bar */}
       <View style={styles.progressContainer}>
         <View style={styles.progressBar}>
           <View
             style={[
               styles.progressFill,
-              { width: `${(downloadedCount / totalCount) * 100}%` },
+              { width: `${downloadPercent}%` },
             ]}
           />
         </View>
       </View>
 
-      {/* Video list */}
       <FlatList
         data={playlist.items}
         keyExtractor={(item) => item.id}
-        renderItem={({ item, index }) => (
-          <Pressable
-            style={[styles.videoItem, !item.isDownloaded && styles.videoItemDisabled]}
-            onPress={() => handleVideoPress(item)}
-            disabled={!item.isDownloaded}
-          >
-            <Text style={styles.videoIndex}>{index + 1}</Text>
-            <View style={styles.videoThumbnailContainer}>
-              {item.thumbnailUrl ? (
-                <Image
-                  source={{ uri: item.thumbnailUrl }}
-                  style={styles.videoThumbnail}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.videoThumbnail, styles.thumbnailPlaceholder]}>
-                  <Text style={styles.thumbnailPlaceholderText}>
-                    {item.title.charAt(0)}
-                  </Text>
-                </View>
-              )}
-              {!item.isDownloaded && (
-                <View style={styles.unavailableOverlay}>
-                  <Text style={styles.unavailableText}>Not downloaded</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.videoInfo}>
-              <Text
-                style={[styles.videoTitle, !item.isDownloaded && styles.videoTitleDisabled]}
-                numberOfLines={2}
-              >
-                {item.title}
-              </Text>
-              <Text style={styles.videoChannel}>{item.channelTitle}</Text>
-              <Text style={styles.videoDuration}>
-                {formatDuration(item.duration)}
-              </Text>
-            </View>
-            {item.isDownloaded && (
-              <View style={styles.availableBadge}>
-                <Text style={styles.availableBadgeText}>✓</Text>
-              </View>
-            )}
-          </Pressable>
-        )}
-        contentContainerStyle={styles.list}
+        numColumns={2}
+        columnWrapperStyle={styles.gridRow}
+        contentContainerStyle={styles.gridList}
+        renderItem={({ item }) => {
+          const pendingState = getPendingState(item.videoId);
+          const canCancel =
+            pendingState.type === "preparing" ||
+            pendingState.type === "queued" ||
+            pendingState.type === "downloading";
+
+          return (
+            <VideoGridCard
+              video={{
+                id: item.videoId,
+                title: item.title,
+                channelTitle: item.channelTitle,
+                duration: item.duration,
+                thumbnailUrl: item.thumbnailUrl ?? undefined,
+              }}
+              pending={pendingState}
+              onPress={() => {
+                void handleVideoPress(item);
+              }}
+              onCancelPress={
+                canCancel ? () => handleCancelVideo(item.videoId) : undefined
+              }
+            />
+          );
+        }}
       />
     </SafeAreaView>
   );
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  }
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 const styles = StyleSheet.create({
@@ -230,94 +484,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#22c55e",
     borderRadius: 2,
   },
-  list: {
-    padding: 16,
-  },
-  videoItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#18181b",
-    borderRadius: 12,
+  gridList: {
     padding: 12,
-    marginBottom: 8,
+    paddingBottom: 24,
   },
-  videoItemDisabled: {
-    opacity: 0.6,
-  },
-  videoIndex: {
-    color: "#71717a",
-    fontSize: 14,
-    fontWeight: "600",
-    width: 24,
-    textAlign: "center",
-  },
-  videoThumbnailContainer: {
-    width: 80,
-    height: 45,
-    borderRadius: 6,
-    overflow: "hidden",
-    marginLeft: 8,
-    backgroundColor: "#27272a",
-  },
-  videoThumbnail: {
-    width: "100%",
-    height: "100%",
-  },
-  thumbnailPlaceholder: {
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#6366f1",
-  },
-  thumbnailPlaceholderText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  unavailableOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  unavailableText: {
-    color: "#fff",
-    fontSize: 10,
-    fontWeight: "500",
-  },
-  videoInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  videoTitle: {
-    color: "#fafafa",
-    fontSize: 14,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  videoTitleDisabled: {
-    color: "#71717a",
-  },
-  videoChannel: {
-    color: "#71717a",
-    fontSize: 12,
-    marginBottom: 2,
-  },
-  videoDuration: {
-    color: "#52525b",
-    fontSize: 11,
-  },
-  availableBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#22c55e",
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 8,
-  },
-  availableBadgeText: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "700",
+  gridRow: {
+    justifyContent: "space-between",
   },
 });

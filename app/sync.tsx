@@ -14,7 +14,7 @@ import { useConnectionStore } from "../stores/connection";
 import { useLibraryStore } from "../stores/library";
 import { useDownloadStore } from "../stores/downloads";
 import { usePlaybackStore } from "../stores/playback";
-import { savePlaylist } from "../db/repositories/playlists";
+import { savePlaylist, isPlaylistSaved } from "../db/repositories/playlists";
 import {
   SyncTabBar,
   ChannelList,
@@ -83,6 +83,7 @@ export default function SyncScreen() {
   const syncedVideoIds = new Set(libraryVideos.map((v) => v.id));
 
   const [pendingVideoIds, setPendingVideoIds] = useState<Set<string>>(new Set());
+  const [, bumpSavedPlaylistVersion] = useState(0);
 
   const setPending = useCallback((videoId: string, isPending: boolean) => {
     setPendingVideoIds((prev) => {
@@ -515,7 +516,7 @@ export default function SyncScreen() {
         <Text style={styles.errorText}>Not connected to server</Text>
         <Pressable
           style={styles.connectButton}
-          onPress={() => router.push("/connect")}
+          onPress={() => router.push("/(tabs)/settings")}
         >
           <Text style={styles.connectButtonText}>Connect</Text>
         </Pressable>
@@ -543,6 +544,41 @@ export default function SyncScreen() {
   const currentTitle = getCurrentTitle();
 
   if (isShowingVideos) {
+    const isChannelDetail = Boolean(selectedChannel);
+    const saveTarget = (() => {
+      if (selectedChannel) {
+        return {
+          playlistId: `channel_${selectedChannel.channelId}`,
+          playlistTitle: selectedChannel.channelTitle,
+          playlistType: "channel",
+          sourceId: selectedChannel.channelId,
+          thumbnailUrl: selectedChannel.thumbnailUrl,
+        };
+      }
+
+      if (selectedPlaylist) {
+        return {
+          playlistId: `playlist_${selectedPlaylist.playlistId}`,
+          playlistTitle: selectedPlaylist.title,
+          playlistType: "playlist",
+          sourceId: selectedPlaylist.channelId,
+          thumbnailUrl: selectedPlaylist.thumbnailUrl,
+        };
+      }
+
+      if (selectedMyList) {
+        return {
+          playlistId: `mylist_${selectedMyList.id}`,
+          playlistTitle: selectedMyList.name,
+          playlistType: "mylist",
+          sourceId: selectedMyList.id,
+          thumbnailUrl: selectedMyList.thumbnailUrl,
+        };
+      }
+
+      return null;
+    })();
+
     // Videos available on server (downloaded on desktop)
     const availableVideos = currentVideos.filter(
       (v) => v.downloadStatus === "completed"
@@ -557,46 +593,39 @@ export default function SyncScreen() {
     ).length;
     const totalAvailable = availableVideos.length;
     const isFullySaved = savedCount === totalAvailable && totalAvailable > 0;
+    const isPlaylistSaveContext = Boolean(selectedPlaylist || selectedMyList);
+    const isSaveActionDone =
+      isPlaylistSaveContext && saveTarget
+        ? isPlaylistSaved(saveTarget.playlistId)
+        : isFullySaved;
 
     const handleSavePlaylistOffline = () => {
-      // Determine playlist info based on what's selected
-      let playlistId = "";
-      let playlistTitle = "";
-      let playlistType = "";
-      let sourceId: string | null = null;
-      let thumbnailUrl: string | null = null;
-
-      if (selectedChannel) {
-        playlistId = `channel_${selectedChannel.channelId}`;
-        playlistTitle = selectedChannel.channelTitle;
-        playlistType = "channel";
-        sourceId = selectedChannel.channelId;
-        thumbnailUrl = selectedChannel.thumbnailUrl;
-      } else if (selectedPlaylist) {
-        playlistId = `playlist_${selectedPlaylist.playlistId}`;
-        playlistTitle = selectedPlaylist.title;
-        playlistType = "playlist";
-        sourceId = selectedPlaylist.channelId;
-        thumbnailUrl = selectedPlaylist.thumbnailUrl;
-      } else if (selectedMyList) {
-        playlistId = `mylist_${selectedMyList.id}`;
-        playlistTitle = selectedMyList.name;
-        playlistType = "mylist";
-        sourceId = selectedMyList.id;
-        thumbnailUrl = selectedMyList.thumbnailUrl;
+      if (!saveTarget) {
+        return;
       }
 
-      // Save playlist metadata with all videos (not just available ones)
-      if (playlistId) {
-        const videoInfos = currentVideos.map((v) => ({
-          videoId: v.id,
-          title: v.title,
-          channelTitle: v.channelTitle,
-          duration: v.duration,
-          thumbnailUrl: v.thumbnailUrl ?? undefined,
-        }));
+      const videoInfos = currentVideos.map((v) => ({
+        videoId: v.id,
+        title: v.title,
+        channelTitle: v.channelTitle,
+        duration: v.duration,
+        thumbnailUrl: v.thumbnailUrl ?? undefined,
+      }));
 
-        savePlaylist(playlistId, playlistTitle, playlistType, sourceId, thumbnailUrl, videoInfos);
+      try {
+        savePlaylist(
+          saveTarget.playlistId,
+          saveTarget.playlistTitle,
+          saveTarget.playlistType,
+          saveTarget.sourceId,
+          saveTarget.thumbnailUrl,
+          videoInfos
+        );
+        bumpSavedPlaylistVersion((value) => value + 1);
+      } catch (error) {
+        console.log("[Sync] Failed to save playlist:", error);
+        Alert.alert("Save failed", "Could not save playlist. Please try again.");
+        return;
       }
 
       if (!serverUrl) {
@@ -634,17 +663,21 @@ export default function SyncScreen() {
             </Text>
           </View>
           {/* Save Offline Button */}
-          {currentVideos.length > 0 && serverUrl && (
+          {!isChannelDetail && currentVideos.length > 0 && serverUrl && (
             <Pressable
               style={[
                 styles.saveOfflineButton,
-                isFullySaved && styles.saveOfflineButtonDisabled,
+                isSaveActionDone && styles.saveOfflineButtonDisabled,
               ]}
               onPress={handleSavePlaylistOffline}
-              disabled={isFullySaved}
+              disabled={isSaveActionDone}
             >
               <Text style={styles.saveOfflineButtonText}>
-                {isFullySaved ? "✓ Saved" : "Save All"}
+                {isSaveActionDone
+                  ? "Saved"
+                  : isPlaylistSaveContext
+                    ? "Save Playlist"
+                    : "Save All"}
               </Text>
             </Pressable>
           )}
@@ -665,7 +698,7 @@ export default function SyncScreen() {
         )}
 
         {/* Selection toolbar */}
-        {syncableCount > 0 && (
+        {!isChannelDetail && syncableCount > 0 && (
           <View style={styles.toolbar}>
             <Pressable
               style={styles.toolbarButton}
@@ -730,8 +763,8 @@ export default function SyncScreen() {
                 }
                 onSyncPress={
                   serverUrl &&
-                  item.downloadStatus === "completed" &&
-                  !syncedVideoIds.has(item.id)
+                    item.downloadStatus === "completed" &&
+                    !syncedVideoIds.has(item.id)
                     ? () => handleSyncVideo(item)
                     : undefined
                 }
@@ -754,7 +787,7 @@ export default function SyncScreen() {
           </Text>
           <Pressable
             style={styles.offlineBannerButton}
-            onPress={() => router.push("/connect")}
+            onPress={() => router.push("/(tabs)/settings")}
           >
             <Text style={styles.offlineBannerButtonText}>Reconnect</Text>
           </Pressable>

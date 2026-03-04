@@ -15,15 +15,14 @@ import { useDownloadStore } from "../../stores/downloads";
 import { useConnectionStore } from "../../stores/connection";
 import { useSyncStore } from "../../stores/sync";
 import { usePlaybackStore } from "../../stores/playback";
-import { savePlaylist } from "../../db/repositories/playlists";
+import { savePlaylist, isPlaylistSaved } from "../../db/repositories/playlists";
 import {
   SyncTabBar,
   ChannelList,
   PlaylistList,
-  VideoListItem,
   MyListsList,
-  SubscriptionVideoGridItem,
 } from "../../components/sync";
+import { VideoGridCard } from "../../components/VideoGridCard";
 import { colors, radius, spacing, fontSize, fontWeight } from "../../theme";
 import { Smartphone, ArrowLeft, Play } from "../../theme/icons";
 import type {
@@ -38,13 +37,10 @@ import { getVideoLocalPath, videoExistsLocally } from "../../services/downloader
 
 export default function HomeScreen() {
   const serverUrl = useConnectionStore((s) => s.serverUrl);
-  const serverName = useConnectionStore((s) => s.serverName);
-  const disconnect = useConnectionStore((s) => s.disconnect);
   const isConnected = !!serverUrl;
 
   const libraryVideos = useLibraryStore((s) => s.videos);
   const queueDownload = useDownloadStore((s) => s.queueDownload);
-  const downloadQueue = useDownloadStore((s) => s.queue);
 
   const {
     activeTab,
@@ -94,6 +90,7 @@ export default function HomeScreen() {
   const syncedVideoIds = new Set(libraryVideos.map((v) => v.id));
 
   const [pendingVideoIds, setPendingVideoIds] = useState<Set<string>>(new Set());
+  const [, bumpSavedPlaylistVersion] = useState(0);
 
   const setPending = useCallback((videoId: string, isPending: boolean) => {
     setPendingVideoIds((prev) => {
@@ -106,10 +103,6 @@ export default function HomeScreen() {
       return next;
     });
   }, []);
-
-  // Download status
-  const activeDownloads = downloadQueue.filter((d) => d.status === "downloading");
-  const queuedDownloads = downloadQueue.filter((d) => d.status === "queued");
 
   // Fetch data when tab changes or on connect
   useEffect(() => {
@@ -642,16 +635,16 @@ export default function HomeScreen() {
   // Not connected and no cache - show connect prompt
   if (!isConnected && !hasCachedData) {
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.emptyState}>
           <Smartphone size={64} color={colors.mutedForeground} />
           <Text style={styles.emptyTitle}>LearnifyTube</Text>
           <Text style={styles.emptyText}>
             Connect to your LearnifyTube desktop app to browse and sync videos
           </Text>
-          <Link href="/connect" asChild>
+          <Link href="/(tabs)/settings" asChild>
             <Pressable style={styles.connectButton}>
-              <Text style={styles.connectButtonText}>Connect to Desktop</Text>
+              <Text style={styles.connectButtonText}>Go to Settings</Text>
             </Pressable>
           </Link>
         </View>
@@ -679,6 +672,41 @@ export default function HomeScreen() {
   const currentTitle = getCurrentTitle();
 
   if (isShowingVideos) {
+    const isChannelDetail = Boolean(selectedChannel);
+    const saveTarget = (() => {
+      if (selectedChannel) {
+        return {
+          playlistId: `channel_${selectedChannel.channelId}`,
+          playlistTitle: selectedChannel.channelTitle,
+          playlistType: "channel",
+          sourceId: selectedChannel.channelId,
+          thumbnailUrl: selectedChannel.thumbnailUrl,
+        };
+      }
+
+      if (selectedPlaylist) {
+        return {
+          playlistId: `playlist_${selectedPlaylist.playlistId}`,
+          playlistTitle: selectedPlaylist.title,
+          playlistType: "playlist",
+          sourceId: selectedPlaylist.channelId,
+          thumbnailUrl: selectedPlaylist.thumbnailUrl,
+        };
+      }
+
+      if (selectedMyList) {
+        return {
+          playlistId: `mylist_${selectedMyList.id}`,
+          playlistTitle: selectedMyList.name,
+          playlistType: "mylist",
+          sourceId: selectedMyList.id,
+          thumbnailUrl: selectedMyList.thumbnailUrl,
+        };
+      }
+
+      return null;
+    })();
+
     // Videos available on server (downloaded on desktop)
     const availableVideos = currentVideos.filter(
       (v) => v.downloadStatus === "completed"
@@ -691,6 +719,11 @@ export default function HomeScreen() {
     ).length;
     const totalAvailable = availableVideos.length;
     const isFullySaved = savedCount === totalAvailable && totalAvailable > 0;
+    const isPlaylistSaveContext = Boolean(selectedPlaylist || selectedMyList);
+    const isSaveActionDone =
+      isPlaylistSaveContext && saveTarget
+        ? isPlaylistSaved(saveTarget.playlistId)
+        : isFullySaved;
 
     const localPlayableCount = currentVideos.filter((v) =>
       syncedVideoIds.has(v.id)
@@ -698,44 +731,32 @@ export default function HomeScreen() {
     const playableCount = serverUrl ? totalAvailable : localPlayableCount;
 
     const handleSavePlaylistOffline = () => {
-      // Determine playlist info based on what's selected
-      let playlistId = "";
-      let playlistTitle = "";
-      let playlistType = "";
-      let sourceId: string | null = null;
-      let thumbnailUrl: string | null = null;
-
-      if (selectedChannel) {
-        playlistId = `channel_${selectedChannel.channelId}`;
-        playlistTitle = selectedChannel.channelTitle;
-        playlistType = "channel";
-        sourceId = selectedChannel.channelId;
-        thumbnailUrl = selectedChannel.thumbnailUrl;
-      } else if (selectedPlaylist) {
-        playlistId = `playlist_${selectedPlaylist.playlistId}`;
-        playlistTitle = selectedPlaylist.title;
-        playlistType = "playlist";
-        sourceId = selectedPlaylist.channelId;
-        thumbnailUrl = selectedPlaylist.thumbnailUrl;
-      } else if (selectedMyList) {
-        playlistId = `mylist_${selectedMyList.id}`;
-        playlistTitle = selectedMyList.name;
-        playlistType = "mylist";
-        sourceId = selectedMyList.id;
-        thumbnailUrl = selectedMyList.thumbnailUrl;
+      if (!saveTarget) {
+        return;
       }
 
-      // Save playlist metadata with all videos
-      if (playlistId) {
-        const videoInfos = currentVideos.map((v) => ({
-          videoId: v.id,
-          title: v.title,
-          channelTitle: v.channelTitle,
-          duration: v.duration,
-          thumbnailUrl: v.thumbnailUrl ?? undefined,
-        }));
+      const videoInfos = currentVideos.map((v) => ({
+        videoId: v.id,
+        title: v.title,
+        channelTitle: v.channelTitle,
+        duration: v.duration,
+        thumbnailUrl: v.thumbnailUrl ?? undefined,
+      }));
 
-        savePlaylist(playlistId, playlistTitle, playlistType, sourceId, thumbnailUrl, videoInfos);
+      try {
+        savePlaylist(
+          saveTarget.playlistId,
+          saveTarget.playlistTitle,
+          saveTarget.playlistType,
+          saveTarget.sourceId,
+          saveTarget.thumbnailUrl,
+          videoInfos
+        );
+        bumpSavedPlaylistVersion((value) => value + 1);
+      } catch (error) {
+        console.log("[Home] Failed to save playlist:", error);
+        Alert.alert("Save failed", "Could not save playlist. Please try again.");
+        return;
       }
 
       if (!serverUrl) {
@@ -756,7 +777,7 @@ export default function HomeScreen() {
     };
 
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <SafeAreaView style={styles.container} edges={["top"]}>
         {/* Header with back button */}
         <View style={styles.videoHeader}>
           <Pressable style={styles.backButton} onPress={handleBackPress}>
@@ -773,17 +794,21 @@ export default function HomeScreen() {
             </Text>
           </View>
           {/* Save Offline Button */}
-          {currentVideos.length > 0 && serverUrl && (
+          {!isChannelDetail && currentVideos.length > 0 && serverUrl && (
             <Pressable
               style={[
                 styles.saveOfflineButton,
-                isFullySaved && styles.saveOfflineButtonDisabled,
+                isSaveActionDone && styles.saveOfflineButtonDisabled,
               ]}
               onPress={handleSavePlaylistOffline}
-              disabled={isFullySaved}
+              disabled={isSaveActionDone}
             >
               <Text style={styles.saveOfflineButtonText}>
-                {isFullySaved ? "Saved" : "Save All"}
+                {isSaveActionDone
+                  ? "Saved"
+                  : isPlaylistSaveContext
+                    ? "Save Playlist"
+                    : "Save All"}
               </Text>
             </Pressable>
           )}
@@ -804,7 +829,7 @@ export default function HomeScreen() {
         )}
 
         {/* Action toolbar */}
-        {(syncableCount > 0 || playableCount > 0) && (
+        {!isChannelDetail && (syncableCount > 0 || playableCount > 0) && (
           <View style={styles.toolbar}>
             {syncableCount > 0 && (
               <Pressable
@@ -839,7 +864,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Video list */}
+        {/* Video grid */}
         {isLoadingVideos ? (
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={colors.primary} />
@@ -856,37 +881,23 @@ export default function HomeScreen() {
           </View>
         ) : (
           <FlatList
+            style={{ flex: 1 }}
             data={currentVideos}
             keyExtractor={(item) => item.id}
+            numColumns={2}
+            columnWrapperStyle={styles.gridRow}
+            contentContainerStyle={styles.gridList}
             renderItem={({ item }) => (
-              <VideoListItem
+              <VideoGridCard
                 video={item}
-                isSelected={selectedVideoIds.has(item.id)}
-                isSyncedToMobile={syncedVideoIds.has(item.id)}
-                onPress={() => {
-                  if (
-                    serverUrl &&
-                    item.downloadStatus === "completed" &&
-                    !syncedVideoIds.has(item.id)
-                  ) {
-                    toggleVideoSelection(item.id);
-                  }
-                }}
-                onPlayPress={
-                  item.downloadStatus === "completed" || syncedVideoIds.has(item.id)
-                    ? () => handlePlayVideo(item)
-                    : undefined
+                pending={
+                  pendingVideoIds.has(item.id)
+                    ? { type: "preparing" }
+                    : { type: "none" }
                 }
-                onSyncPress={
-                  serverUrl &&
-                  item.downloadStatus === "completed" &&
-                  !syncedVideoIds.has(item.id)
-                    ? () => handleSyncVideo(item)
-                    : undefined
-                }
+                onPress={() => handleSubscriptionVideoPress(item)}
               />
             )}
-            contentContainerStyle={styles.videoList}
           />
         )}
       </SafeAreaView>
@@ -895,57 +906,7 @@ export default function HomeScreen() {
 
   // Main browsing view with tabs
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
-      {/* Connection header */}
-      <View
-        style={[
-          styles.connectionHeader,
-          !isConnected && styles.connectionHeaderOffline,
-        ]}
-      >
-        <View style={styles.connectionInfo}>
-          <View
-            style={[
-              styles.connectionDot,
-              !isConnected && styles.connectionDotOffline,
-            ]}
-          />
-          <Text style={styles.connectionText}>
-            {isConnected
-              ? `Connected to ${serverName || "Desktop"}`
-              : "Offline mode (showing cached data)"}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          {isConnected && (activeDownloads.length > 0 || queuedDownloads.length > 0) && (
-            <View style={styles.downloadStatus}>
-              {activeDownloads.length > 0 && (
-                <Text style={styles.downloadStatusText}>
-                  {activeDownloads.length}
-                  {activeDownloads[0] && ` (${activeDownloads[0].progress}%)`}
-                </Text>
-              )}
-              {queuedDownloads.length > 0 && (
-                <Text style={styles.queuedStatusText}>
-                  {queuedDownloads.length} queued
-                </Text>
-              )}
-            </View>
-          )}
-          {isConnected ? (
-            <Pressable style={styles.disconnectButton} onPress={disconnect}>
-              <Text style={styles.disconnectButtonText}>Disconnect</Text>
-            </Pressable>
-          ) : (
-            <Link href="/connect" asChild>
-              <Pressable style={styles.reconnectButton}>
-                <Text style={styles.reconnectButtonText}>Reconnect</Text>
-              </Pressable>
-            </Link>
-          )}
-        </View>
-      </View>
-
+    <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Tab bar */}
       <SyncTabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
@@ -974,7 +935,7 @@ export default function HomeScreen() {
       )}
 
       {activeTab === "subscriptions" && (
-        <>
+        <View style={{ flex: 1 }}>
           {isLoadingSubscriptions && subscriptionVideos.length === 0 ? (
             <View style={styles.centered}>
               <ActivityIndicator size="large" color={colors.primary} />
@@ -991,15 +952,20 @@ export default function HomeScreen() {
             </View>
           ) : (
             <FlatList
+              style={{ flex: 1 }}
               data={subscriptionVideos}
               keyExtractor={(item) => item.id}
               numColumns={2}
               columnWrapperStyle={styles.gridRow}
               contentContainerStyle={styles.gridList}
               renderItem={({ item }) => (
-                <SubscriptionVideoGridItem
+                <VideoGridCard
                   video={item}
-                  isPending={pendingVideoIds.has(item.id)}
+                  pending={
+                    pendingVideoIds.has(item.id)
+                      ? { type: "preparing" }
+                      : { type: "none" }
+                  }
                   onPress={() => handleSubscriptionVideoPress(item)}
                 />
               )}
@@ -1007,7 +973,7 @@ export default function HomeScreen() {
               onRefresh={handleRefreshSubscriptions}
             />
           )}
-        </>
+        </View>
       )}
 
       {activeTab === "mylists" && (
@@ -1085,80 +1051,6 @@ const styles = StyleSheet.create({
     color: colors.primaryForeground,
     fontSize: fontSize.lg,
     fontWeight: fontWeight.semibold,
-  },
-  connectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 4,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  connectionHeaderOffline: {
-    backgroundColor: colors.background,
-  },
-  connectionInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-  connectionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.success,
-    marginRight: spacing.sm,
-  },
-  connectionDotOffline: {
-    backgroundColor: "#f59e0b",
-  },
-  connectionText: {
-    color: colors.foreground,
-    fontSize: fontSize.base,
-    fontWeight: fontWeight.medium,
-  },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm + 4,
-  },
-  downloadStatus: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  downloadStatusText: {
-    color: colors.primary,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
-  },
-  queuedStatusText: {
-    color: colors.mutedForeground,
-    fontSize: fontSize.sm,
-  },
-  disconnectButton: {
-    paddingHorizontal: spacing.sm + 4,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: colors.muted,
-  },
-  disconnectButtonText: {
-    color: colors.foreground,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-  },
-  reconnectButton: {
-    paddingHorizontal: spacing.sm + 4,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: colors.primary,
-  },
-  reconnectButtonText: {
-    color: colors.primaryForeground,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
   },
   videoHeader: {
     flexDirection: "row",
