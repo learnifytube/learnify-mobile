@@ -8,6 +8,7 @@ import { useDatabase } from "../hooks/useDatabase";
 import { useLibraryStore } from "../stores/library";
 import { useNavigationLogger } from "../hooks/useNavigationLogger";
 import { usePresencePublisher } from "../hooks/usePresencePublisher";
+import { useSelfUpdateCheck } from "../hooks/useSelfUpdateCheck";
 import { colors } from "../theme";
 import * as Sentry from '@sentry/react-native';
 
@@ -42,6 +43,11 @@ function NavigationLogger() {
 
 function PresencePublisher() {
   usePresencePublisher();
+  return null;
+}
+
+function SelfUpdateChecker() {
+  useSelfUpdateCheck();
   return null;
 }
 
@@ -108,6 +114,7 @@ export default Sentry.wrap(function RootLayout() {
         <DownloadProcessor />
         <NavigationLogger />
         <PresencePublisher />
+        <SelfUpdateChecker />
         <StatusBar style="light" />
         <Stack
           screenOptions={{

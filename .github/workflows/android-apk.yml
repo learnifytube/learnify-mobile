@@ -62,7 +62,12 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           mkdir -p dist-apk
           APK_SOURCE="$(ls android/app/build/outputs/apk/release/*.apk | head -n 1)"
-          RELEASE_APK="dist-apk/learnify-mobile-${TAG}.apk"
+          VERSION_CODE="$(node -e "const app=require('./app.json'); const vc=app?.expo?.android?.versionCode; process.stdout.write(vc == null ? '' : String(vc));")"
+          if [[ -n "$VERSION_CODE" ]]; then
+            RELEASE_APK="dist-apk/learnify-mobile-${TAG}-vc${VERSION_CODE}.apk"
+          else
+            RELEASE_APK="dist-apk/learnify-mobile-${TAG}.apk"
+          fi
           cp "$APK_SOURCE" "$RELEASE_APK"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "apk_path=${RELEASE_APK}" >> "$GITHUB_OUTPUT"

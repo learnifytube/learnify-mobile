@@ -2,7 +2,7 @@
   "expo": {
     "name": "LearnifyTube",
     "slug": "learnify-mobile",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "learnify",
@@ -38,9 +38,10 @@
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ],
-      "versionCode": 6
+      "versionCode": 7
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -75,6 +76,12 @@
       },
       "eas": {
         "projectId": "learnify-mobile"
+      },
+      "apkUpdate": {
+        "manifestUrl": "",
+        "githubRepo": "hunght/learnify-mobile",
+        "checkOnLaunch": true,
+        "requestTimeoutMs": 10000
       }
     }
   }

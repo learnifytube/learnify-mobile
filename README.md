@@ -38,6 +38,61 @@ npm run android
 4. Note the IP address displayed
 5. Open the mobile app and enter the IP address
 
+## APK Self-Update (Standalone Distribution)
+
+This app now supports in-app APK updates for non-Play Store installs.
+
+### 1) Configure update source (GitHub Releases)
+
+Set `expo.extra.apkUpdate.githubRepo` in `app.json`.
+
+```json
+{
+  "expo": {
+    "extra": {
+      "apkUpdate": {
+        "githubRepo": "hunght/learnify-mobile",
+        "githubAssetName": "",
+        "manifestUrl": "",
+        "checkOnLaunch": true,
+        "requestTimeoutMs": 10000
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `githubRepo` is `owner/repo` for GitHub Releases API (`/releases/latest`).
+- `githubAssetName` is optional; if empty, updater picks the first `.apk` asset in latest release.
+- `manifestUrl` is optional fallback if you still want your own `version.json`.
+
+### 2) Version detection rules
+
+Updater compares current app vs latest release using:
+- `versionCode` (preferred): from release body line like `versionCode: 7`, or asset filename like `...-vc7.apk`.
+- `versionName` semver fallback: from release tag/name like `v1.0.7`.
+
+Optional `version.json` format (if using `manifestUrl`):
+
+```json
+{
+  "versionCode": 7,
+  "versionName": "1.0.7",
+  "apkUrl": "https://your-domain.com/learnify/LearnifyTube-v1.0.7.apk",
+  "releaseNotes": "Performance improvements and bug fixes.",
+  "forceUpdate": false
+}
+```
+
+### 3) Runtime behavior
+
+- On Android launch, app checks latest GitHub Release (or `manifestUrl` if configured).
+- If a newer build/version is detected, user is prompted.
+- On accept, app downloads APK and opens Android package installer.
+
+Important: every new APK must be signed with the same keystore as previous installs.
+
 ## CI/CD (100% Free)
 
 Only one workflow is kept:

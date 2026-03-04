@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import { useState, useEffect, useCallback } from "react";
 import {
   View,
@@ -5,16 +6,18 @@ import {
   StyleSheet,
   Pressable,
   FlatList,
-  ActivityIndicator,
   ScrollView,
   Modal,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSettingsStore, LANGUAGES } from "../../stores/settings";
 import { useConnectionStore } from "../../stores/connection";
-import { api } from "../../services/api";
-import * as wordsRepo from "../../db/repositories/words";
-import type { RemoteSavedWord } from "../../types";
+import {
+  checkForAndroidApkUpdate,
+  getAndroidApkUpdateAvailability,
+  type AndroidApkUpdateAvailability,
+} from "../../services/app-update";
 
 export default function SettingsScreen() {
   const targetLang = useSettingsStore((s) => s.translationTargetLang);
@@ -22,41 +25,49 @@ export default function SettingsScreen() {
   const serverUrl = useConnectionStore((s) => s.serverUrl);
 
   const [showLangPicker, setShowLangPicker] = useState(false);
-  const [showMyWords, setShowMyWords] = useState(false);
-  const [savedWords, setSavedWords] = useState<RemoteSavedWord[]>([]);
-  const [isLoadingWords, setIsLoadingWords] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isLoadingUpdateAvailability, setIsLoadingUpdateAvailability] =
+    useState(false);
+  const [updateAvailability, setUpdateAvailability] =
+    useState<AndroidApkUpdateAvailability | null>(null);
 
   const selectedLang = LANGUAGES.find((l) => l.code === targetLang) ?? LANGUAGES[0];
 
-  const loadSavedWords = useCallback(async () => {
-    setIsLoadingWords(true);
-    try {
-      // Local-first: always show cached words immediately (works offline).
-      setSavedWords(wordsRepo.getAllSavedWordsLocal());
+  const appVersion =
+    Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? "unknown";
+  const appBuild = Constants.nativeBuildVersion ?? "-";
 
-      // If connected, refresh from desktop and upsert to local cache.
-      if (serverUrl) {
-        const result = await api.getSavedWords(serverUrl);
-        wordsRepo.upsertRemoteSavedWords(result.words);
-        setSavedWords(wordsRepo.getAllSavedWordsLocal());
-      }
-    } catch (e) {
-      console.log("[Settings] Failed to load saved words:", e);
+  const refreshUpdateAvailability = useCallback(async () => {
+    setIsLoadingUpdateAvailability(true);
+    try {
+      const availability = await getAndroidApkUpdateAvailability();
+      setUpdateAvailability(availability);
     } finally {
-      setIsLoadingWords(false);
+      setIsLoadingUpdateAvailability(false);
     }
-  }, [serverUrl]);
+  }, []);
 
   useEffect(() => {
-    if (showMyWords) {
-      loadSavedWords();
+    void refreshUpdateAvailability();
+  }, [refreshUpdateAvailability]);
+
+  const handleUpdatePress = useCallback(async () => {
+    if (isCheckingUpdate) {
+      return;
     }
-  }, [showMyWords, loadSavedWords]);
+
+    setIsCheckingUpdate(true);
+    try {
+      await checkForAndroidApkUpdate({ manual: true });
+    } finally {
+      setIsCheckingUpdate(false);
+      void refreshUpdateAvailability();
+    }
+  }, [isCheckingUpdate, refreshUpdateAvailability]);
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <ScrollView style={styles.scrollView}>
-        {/* Translation Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Translation</Text>
 
@@ -77,27 +88,6 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
-        {/* My Words */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>My Words</Text>
-
-          <Pressable
-            style={styles.settingRow}
-            onPress={() => setShowMyWords(true)}
-          >
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>Saved Words</Text>
-              <Text style={styles.settingDescription}>
-                View words you've saved while watching videos
-              </Text>
-            </View>
-            <View style={styles.settingValue}>
-              <Text style={styles.chevron}>›</Text>
-            </View>
-          </Pressable>
-        </View>
-
-        {/* Connection */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Connection</Text>
           <View style={styles.settingRow}>
@@ -115,9 +105,70 @@ export default function SettingsScreen() {
             />
           </View>
         </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>App</Text>
+
+          {isLoadingUpdateAvailability && (
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Checking updates</Text>
+                <Text style={styles.settingDescription}>
+                  Looking for the latest APK release
+                </Text>
+              </View>
+              <ActivityIndicator size="small" color="#e94560" />
+            </View>
+          )}
+
+          {updateAvailability?.hasUpdate && (
+            <Pressable
+              style={[
+                styles.settingRow,
+                isCheckingUpdate && styles.settingRowDisabled,
+              ]}
+              onPress={handleUpdatePress}
+              disabled={isCheckingUpdate}
+            >
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Update App</Text>
+                <Text style={styles.settingDescription}>
+                  {updateAvailability.latestVersionLabel
+                    ? `New version ${updateAvailability.latestVersionLabel} is available`
+                    : "A new app version is available"}
+                </Text>
+              </View>
+              <View style={styles.settingValue}>
+                <Text style={styles.settingValueText}>
+                  {isCheckingUpdate ? "Opening..." : "Update now"}
+                </Text>
+                <Text style={styles.chevron}>›</Text>
+              </View>
+            </Pressable>
+          )}
+
+          {!isLoadingUpdateAvailability &&
+            updateAvailability?.configured &&
+            !updateAvailability.hasUpdate && (
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>App is up to date</Text>
+                  <Text style={styles.settingDescription}>
+                    You already have the latest release
+                  </Text>
+                </View>
+              </View>
+            )}
+        </View>
+
+        <View style={styles.appInfoFooter}>
+          <Text style={styles.appInfoText}>LearnifyTube</Text>
+          <Text style={styles.appInfoSubText}>
+            Version {appVersion} (build {appBuild})
+          </Text>
+        </View>
       </ScrollView>
 
-      {/* Language Picker Modal */}
       <Modal
         visible={showLangPicker}
         transparent
@@ -168,63 +219,6 @@ export default function SettingsScreen() {
           </View>
         </Pressable>
       </Modal>
-
-      {/* My Words Modal */}
-      <Modal
-        visible={showMyWords}
-        animationType="slide"
-        onRequestClose={() => setShowMyWords(false)}
-      >
-        <SafeAreaView style={styles.wordsModal}>
-          <View style={styles.wordsHeader}>
-            <Text style={styles.wordsTitle}>My Words</Text>
-            <Pressable onPress={() => setShowMyWords(false)}>
-              <Text style={styles.wordsClose}>Done</Text>
-            </Pressable>
-          </View>
-
-          {isLoadingWords ? (
-            <View style={styles.wordsCentered}>
-              <ActivityIndicator size="large" color="#e94560" />
-              <Text style={styles.wordsLoadingText}>Loading words...</Text>
-            </View>
-          ) : savedWords.length === 0 ? (
-            <View style={styles.wordsCentered}>
-              <Text style={styles.wordsEmptyIcon}>📚</Text>
-              <Text style={styles.wordsEmptyText}>
-                No saved words yet.{"\n"}Tap words in transcript to translate and save them.
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              data={savedWords}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.wordsList}
-              renderItem={({ item }) => (
-                <View style={styles.wordCard}>
-                  <View style={styles.wordMainRow}>
-                    <Text style={styles.wordSource}>{item.sourceText}</Text>
-                    <Text style={styles.wordArrow}>→</Text>
-                    <Text style={styles.wordTranslated}>
-                      {item.translatedText}
-                    </Text>
-                  </View>
-                  <View style={styles.wordMetaRow}>
-                    <Text style={styles.wordLang}>
-                      {item.sourceLang} → {item.targetLang}
-                    </Text>
-                    {item.reviewCount > 0 && (
-                      <Text style={styles.wordReviews}>
-                        {item.reviewCount} reviews
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              )}
-            />
-          )}
-        </SafeAreaView>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -238,211 +232,141 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   section: {
-    marginTop: 24,
-    marginHorizontal: 16,
+    marginBottom: 16,
   },
   sectionTitle: {
-    color: "#e94560",
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 1,
+    color: "#8b9dc3",
+    fontSize: 12,
+    fontWeight: "600",
     textTransform: "uppercase",
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    letterSpacing: 1,
+    marginBottom: 8,
+    paddingHorizontal: 16,
   },
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#16213e",
+    justifyContent: "space-between",
+    backgroundColor: "#1a1a2e",
     borderRadius: 12,
     padding: 16,
+    marginHorizontal: 16,
     marginBottom: 8,
+  },
+  settingRowDisabled: {
+    opacity: 0.6,
   },
   settingInfo: {
     flex: 1,
+    marginRight: 12,
   },
   settingLabel: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "500",
-    marginBottom: 4,
+    marginBottom: 2,
   },
   settingDescription: {
-    color: "#666",
+    color: "#a0a0a0",
     fontSize: 13,
     lineHeight: 18,
   },
   settingValue: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 8,
   },
   settingValueText: {
     color: "#e94560",
     fontSize: 15,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   chevron: {
     color: "#666",
     fontSize: 20,
-    marginLeft: 4,
+    fontWeight: "300",
   },
   statusDot: {
     width: 10,
     height: 10,
     borderRadius: 5,
   },
-
-  // Language picker modal
+  appInfoFooter: {
+    marginTop: 8,
+    marginBottom: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  appInfoText: {
+    color: "#8b9dc3",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  appInfoSubText: {
+    color: "#6b7280",
+    fontSize: 12,
+  },
   modalOverlay: {
     flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
   },
   modalContent: {
-    backgroundColor: "#16213e",
+    backgroundColor: "#1a1a2e",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    padding: 20,
-    paddingBottom: 40,
     maxHeight: "70%",
+    paddingHorizontal: 16,
+    paddingBottom: 34,
   },
   modalHandle: {
     width: 40,
     height: 4,
-    backgroundColor: "#333",
+    backgroundColor: "#666",
     borderRadius: 2,
     alignSelf: "center",
+    marginTop: 12,
     marginBottom: 16,
   },
   modalTitle: {
     color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-    textAlign: "center",
+    fontSize: 20,
+    fontWeight: "600",
     marginBottom: 16,
+    textAlign: "center",
   },
   langList: {
-    maxHeight: 400,
+    flexGrow: 0,
   },
   langItem: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 2,
+    backgroundColor: "#0f0f23",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
   },
   langItemActive: {
-    backgroundColor: "rgba(233, 69, 96, 0.1)",
+    backgroundColor: "#e94560",
   },
   langItemText: {
-    color: "#a0a0a0",
+    color: "#fff",
     fontSize: 16,
     flex: 1,
   },
   langItemTextActive: {
-    color: "#e94560",
     fontWeight: "600",
   },
   langCode: {
-    color: "#555",
+    color: "#a0a0a0",
     fontSize: 13,
-    marginRight: 12,
+    marginRight: 8,
+    textTransform: "uppercase",
   },
   checkmark: {
-    color: "#e94560",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-
-  // My Words modal
-  wordsModal: {
-    flex: 1,
-    backgroundColor: "#0f0f23",
-  },
-  wordsHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1a1a2e",
-  },
-  wordsTitle: {
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: "bold",
-  },
-  wordsClose: {
-    color: "#e94560",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  wordsCentered: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 32,
-  },
-  wordsLoadingText: {
-    color: "#a0a0a0",
-    fontSize: 14,
-    marginTop: 16,
-  },
-  wordsEmptyIcon: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  wordsEmptyText: {
-    color: "#666",
-    fontSize: 16,
-    textAlign: "center",
-    lineHeight: 24,
-  },
-  wordsList: {
-    padding: 16,
-  },
-  wordCard: {
-    backgroundColor: "#16213e",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 10,
-  },
-  wordMainRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-  wordSource: {
     color: "#fff",
     fontSize: 18,
-    fontWeight: "600",
-    flex: 1,
-  },
-  wordArrow: {
-    color: "#555",
-    fontSize: 16,
-  },
-  wordTranslated: {
-    color: "#e94560",
-    fontSize: 18,
-    fontWeight: "600",
-    flex: 1,
-    textAlign: "right",
-  },
-  wordMetaRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  wordLang: {
-    color: "#555",
-    fontSize: 12,
-  },
-  wordReviews: {
-    color: "#555",
-    fontSize: 12,
+    fontWeight: "bold",
   },
 });

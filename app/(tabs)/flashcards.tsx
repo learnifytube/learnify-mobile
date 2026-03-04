@@ -6,15 +6,21 @@ import {
   Pressable,
   ActivityIndicator,
   ScrollView,
+  FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useConnectionStore } from "../../stores/connection";
 import { api } from "../../services/api";
-import type { RemoteFlashcard } from "../../types";
+import * as wordsRepo from "../../db/repositories/words";
+import type { RemoteFlashcard, RemoteSavedWord } from "../../types";
+
+type StudyMode = "flashcards" | "words";
 
 export default function FlashcardsScreen() {
   const serverUrl = useConnectionStore((s) => s.serverUrl);
   const isConnected = serverUrl !== null;
+
+  const [mode, setMode] = useState<StudyMode>("flashcards");
 
   const [cards, setCards] = useState<RemoteFlashcard[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -24,6 +30,10 @@ export default function FlashcardsScreen() {
   const [sessionComplete, setSessionComplete] = useState(false);
   const [reviewedCount, setReviewedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  const [savedWords, setSavedWords] = useState<RemoteSavedWord[]>([]);
+  const [isLoadingWords, setIsLoadingWords] = useState(false);
+  const [wordsError, setWordsError] = useState<string | null>(null);
 
   const loadCards = useCallback(async () => {
     if (!serverUrl) return;
@@ -44,11 +54,36 @@ export default function FlashcardsScreen() {
     }
   }, [serverUrl]);
 
+  const loadSavedWords = useCallback(async () => {
+    setIsLoadingWords(true);
+    setWordsError(null);
+    try {
+      setSavedWords(wordsRepo.getAllSavedWordsLocal());
+
+      if (serverUrl) {
+        const result = await api.getSavedWords(serverUrl);
+        wordsRepo.upsertRemoteSavedWords(result.words);
+        setSavedWords(wordsRepo.getAllSavedWordsLocal());
+      }
+    } catch (e) {
+      console.log("[Flashcards] Failed to load saved words:", e);
+      setWordsError("Could not refresh saved words from desktop");
+    } finally {
+      setIsLoadingWords(false);
+    }
+  }, [serverUrl]);
+
   useEffect(() => {
     if (isConnected) {
       loadCards();
     }
   }, [isConnected, loadCards]);
+
+  useEffect(() => {
+    if (mode === "words") {
+      void loadSavedWords();
+    }
+  }, [mode, loadSavedWords]);
 
   const handleGrade = useCallback(
     async (grade: number) => {
@@ -76,10 +111,77 @@ export default function FlashcardsScreen() {
     [serverUrl, cards, currentIndex, isReviewing]
   );
 
-  // Not connected
-  if (!isConnected) {
+  const renderWords = () => {
+    if (isLoadingWords && savedWords.length === 0) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#e94560" />
+          <Text style={styles.loadingText}>Loading saved words...</Text>
+        </View>
+      );
+    }
+
+    if (savedWords.length === 0) {
+      return (
+        <View style={styles.centered}>
+          <Text style={styles.icon}>📚</Text>
+          <Text style={styles.title}>No Saved Words Yet</Text>
+          <Text style={styles.description}>
+            Tap words in transcript while watching videos to save them.
+          </Text>
+          <Pressable style={styles.retryButton} onPress={loadSavedWords}>
+            <Text style={styles.retryButtonText}>Refresh</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
     return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+      <FlatList
+        data={savedWords}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.wordsList}
+        ListHeaderComponent={
+          <View style={styles.wordsHeaderRow}>
+            <Text style={styles.wordsCountLabel}>{savedWords.length} words</Text>
+            <Pressable
+              style={styles.wordsRefreshButton}
+              onPress={loadSavedWords}
+              disabled={isLoadingWords}
+            >
+              <Text style={styles.wordsRefreshText}>
+                {isLoadingWords ? "Refreshing..." : "Refresh"}
+              </Text>
+            </Pressable>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <View style={styles.wordCard}>
+            <View style={styles.wordMainRow}>
+              <Text style={styles.wordSource}>{item.sourceText}</Text>
+              <Text style={styles.wordArrow}>→</Text>
+              <Text style={styles.wordTranslated}>{item.translatedText}</Text>
+            </View>
+            <View style={styles.wordMetaRow}>
+              <Text style={styles.wordLang}>
+                {item.sourceLang} → {item.targetLang}
+              </Text>
+              {item.reviewCount > 0 && (
+                <Text style={styles.wordReviews}>{item.reviewCount} reviews</Text>
+              )}
+            </View>
+          </View>
+        )}
+        ListFooterComponent={
+          wordsError ? <Text style={styles.wordsErrorText}>{wordsError}</Text> : null
+        }
+      />
+    );
+  };
+
+  const renderFlashcards = () => {
+    if (!isConnected) {
+      return (
         <View style={styles.centered}>
           <Text style={styles.icon}>📡</Text>
           <Text style={styles.title}>Connect to Desktop</Text>
@@ -87,26 +189,20 @@ export default function FlashcardsScreen() {
             Connect to your desktop app to study flashcards
           </Text>
         </View>
-      </SafeAreaView>
-    );
-  }
+      );
+    }
 
-  // Loading
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+    if (isLoading) {
+      return (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#e94560" />
           <Text style={styles.loadingText}>Loading flashcards...</Text>
         </View>
-      </SafeAreaView>
-    );
-  }
+      );
+    }
 
-  // Error
-  if (error) {
-    return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+    if (error) {
+      return (
         <View style={styles.centered}>
           <Text style={styles.icon}>⚠️</Text>
           <Text style={styles.description}>{error}</Text>
@@ -114,14 +210,11 @@ export default function FlashcardsScreen() {
             <Text style={styles.retryButtonText}>Retry</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
-    );
-  }
+      );
+    }
 
-  // Session complete
-  if (sessionComplete) {
-    return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+    if (sessionComplete) {
+      return (
         <View style={styles.centered}>
           <Text style={styles.icon}>🎉</Text>
           <Text style={styles.title}>Session Complete!</Text>
@@ -132,14 +225,11 @@ export default function FlashcardsScreen() {
             <Text style={styles.retryButtonText}>Study Again</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
-    );
-  }
+      );
+    }
 
-  // No cards due
-  if (cards.length === 0) {
-    return (
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
+    if (cards.length === 0) {
+      return (
         <View style={styles.centered}>
           <Text style={styles.icon}>✅</Text>
           <Text style={styles.title}>All Caught Up!</Text>
@@ -150,99 +240,127 @@ export default function FlashcardsScreen() {
             <Text style={styles.retryButtonText}>Refresh</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
-    );
-  }
+      );
+    }
 
-  // Active study session
-  const card = cards[currentIndex];
+    const card = cards[currentIndex];
+
+    return (
+      <>
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressFill,
+                { width: `${((currentIndex + 1) / cards.length) * 100}%` },
+              ]}
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {currentIndex + 1} / {cards.length}
+          </Text>
+        </View>
+
+        <ScrollView
+          contentContainerStyle={styles.cardScrollContent}
+          style={styles.cardScroll}
+        >
+          <Pressable
+            style={styles.card}
+            onPress={() => setIsFlipped((f) => !f)}
+          >
+            {!isFlipped ? (
+              <>
+                <Text style={styles.cardLabel}>FRONT</Text>
+                <Text style={styles.cardContent}>{card.frontContent}</Text>
+                {card.contextText && (
+                  <Text style={styles.cardContext}>"{card.contextText}"</Text>
+                )}
+                <Text style={styles.tapHint}>Tap to reveal answer</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.cardLabel}>BACK</Text>
+                <Text style={styles.cardContent}>{card.backContent}</Text>
+                <Text style={[styles.cardLabel, { marginTop: 16 }]}>FRONT</Text>
+                <Text style={styles.cardFrontPreview}>{card.frontContent}</Text>
+              </>
+            )}
+          </Pressable>
+        </ScrollView>
+
+        {isFlipped && (
+          <View style={styles.gradeContainer}>
+            <Text style={styles.gradeLabel}>How well did you know this?</Text>
+            <View style={styles.gradeButtons}>
+              <Pressable
+                style={[styles.gradeButton, styles.gradeAgain]}
+                onPress={() => handleGrade(1)}
+                disabled={isReviewing}
+              >
+                <Text style={styles.gradeEmoji}>😣</Text>
+                <Text style={styles.gradeText}>Again</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.gradeButton, styles.gradeHard]}
+                onPress={() => handleGrade(3)}
+                disabled={isReviewing}
+              >
+                <Text style={styles.gradeEmoji}>😐</Text>
+                <Text style={styles.gradeText}>Hard</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.gradeButton, styles.gradeGood]}
+                onPress={() => handleGrade(4)}
+                disabled={isReviewing}
+              >
+                <Text style={styles.gradeEmoji}>😊</Text>
+                <Text style={styles.gradeText}>Good</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.gradeButton, styles.gradeEasy]}
+                onPress={() => handleGrade(5)}
+                disabled={isReviewing}
+              >
+                <Text style={styles.gradeEmoji}>🤩</Text>
+                <Text style={styles.gradeText}>Easy</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
-      {/* Progress bar */}
-      <View style={styles.progressContainer}>
-        <View style={styles.progressBar}>
-          <View
+      <View style={styles.modeTabs}>
+        <Pressable
+          style={[styles.modeTab, mode === "flashcards" && styles.modeTabActive]}
+          onPress={() => setMode("flashcards")}
+        >
+          <Text
             style={[
-              styles.progressFill,
-              { width: `${((currentIndex + 1) / cards.length) * 100}%` },
+              styles.modeTabText,
+              mode === "flashcards" && styles.modeTabTextActive,
             ]}
-          />
-        </View>
-        <Text style={styles.progressText}>
-          {currentIndex + 1} / {cards.length}
-        </Text>
+          >
+            Flashcards
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeTab, mode === "words" && styles.modeTabActive]}
+          onPress={() => setMode("words")}
+        >
+          <Text
+            style={[styles.modeTabText, mode === "words" && styles.modeTabTextActive]}
+          >
+            My Words
+          </Text>
+        </Pressable>
       </View>
 
-      {/* Card */}
-      <ScrollView
-        contentContainerStyle={styles.cardScrollContent}
-        style={styles.cardScroll}
-      >
-        <Pressable
-          style={styles.card}
-          onPress={() => setIsFlipped((f) => !f)}
-        >
-          {!isFlipped ? (
-            <>
-              <Text style={styles.cardLabel}>FRONT</Text>
-              <Text style={styles.cardContent}>{card.frontContent}</Text>
-              {card.contextText && (
-                <Text style={styles.cardContext}>"{card.contextText}"</Text>
-              )}
-              <Text style={styles.tapHint}>Tap to reveal answer</Text>
-            </>
-          ) : (
-            <>
-              <Text style={styles.cardLabel}>BACK</Text>
-              <Text style={styles.cardContent}>{card.backContent}</Text>
-              <Text style={[styles.cardLabel, { marginTop: 16 }]}>FRONT</Text>
-              <Text style={styles.cardFrontPreview}>{card.frontContent}</Text>
-            </>
-          )}
-        </Pressable>
-      </ScrollView>
-
-      {/* Grade buttons (visible when flipped) */}
-      {isFlipped && (
-        <View style={styles.gradeContainer}>
-          <Text style={styles.gradeLabel}>How well did you know this?</Text>
-          <View style={styles.gradeButtons}>
-            <Pressable
-              style={[styles.gradeButton, styles.gradeAgain]}
-              onPress={() => handleGrade(1)}
-              disabled={isReviewing}
-            >
-              <Text style={styles.gradeEmoji}>😣</Text>
-              <Text style={styles.gradeText}>Again</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.gradeButton, styles.gradeHard]}
-              onPress={() => handleGrade(3)}
-              disabled={isReviewing}
-            >
-              <Text style={styles.gradeEmoji}>😐</Text>
-              <Text style={styles.gradeText}>Hard</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.gradeButton, styles.gradeGood]}
-              onPress={() => handleGrade(4)}
-              disabled={isReviewing}
-            >
-              <Text style={styles.gradeEmoji}>😊</Text>
-              <Text style={styles.gradeText}>Good</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.gradeButton, styles.gradeEasy]}
-              onPress={() => handleGrade(5)}
-              disabled={isReviewing}
-            >
-              <Text style={styles.gradeEmoji}>🤩</Text>
-              <Text style={styles.gradeText}>Easy</Text>
-            </Pressable>
-          </View>
-        </View>
-      )}
+      {mode === "flashcards" ? renderFlashcards() : renderWords()}
     </SafeAreaView>
   );
 }
@@ -251,6 +369,35 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0f0f23",
+  },
+  modeTabs: {
+    flexDirection: "row",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  modeTab: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#2b2b44",
+    backgroundColor: "#12122a",
+    paddingVertical: 10,
+  },
+  modeTabActive: {
+    borderColor: "#e94560",
+    backgroundColor: "#2a1320",
+  },
+  modeTabText: {
+    color: "#a0a0b8",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  modeTabTextActive: {
+    color: "#fff",
   },
   centered: {
     flex: 1,
@@ -325,59 +472,61 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingBottom: 16,
   },
   card: {
-    backgroundColor: "#16213e",
+    backgroundColor: "#1a1a2e",
     borderRadius: 16,
-    padding: 28,
-    minHeight: 250,
+    padding: 24,
+    minHeight: 300,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#1a1a2e",
+    borderColor: "#2a2a40",
   },
   cardLabel: {
     color: "#e94560",
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.5,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 1,
     marginBottom: 12,
   },
   cardContent: {
     color: "#fff",
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: "600",
     textAlign: "center",
-    lineHeight: 34,
-  },
-  cardFrontPreview: {
-    color: "#a0a0a0",
-    fontSize: 16,
-    textAlign: "center",
+    marginBottom: 16,
+    lineHeight: 38,
   },
   cardContext: {
-    color: "#666",
-    fontSize: 14,
-    fontStyle: "italic",
+    color: "#8b9dc3",
+    fontSize: 16,
     textAlign: "center",
-    marginTop: 16,
+    fontStyle: "italic",
+    marginBottom: 16,
   },
   tapHint: {
-    color: "#555",
+    color: "#666",
     fontSize: 13,
-    marginTop: 24,
+    marginTop: 8,
+  },
+  cardFrontPreview: {
+    color: "#8b9dc3",
+    fontSize: 18,
+    textAlign: "center",
   },
   gradeContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    paddingTop: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    paddingTop: 6,
+    backgroundColor: "#0f0f23",
   },
   gradeLabel: {
     color: "#a0a0a0",
-    fontSize: 13,
+    fontSize: 14,
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   gradeButtons: {
     flexDirection: "row",
@@ -385,13 +534,25 @@ const styles = StyleSheet.create({
   },
   gradeButton: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 10,
+    paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
   },
+  gradeAgain: {
+    backgroundColor: "#7f1d1d",
+  },
+  gradeHard: {
+    backgroundColor: "#92400e",
+  },
+  gradeGood: {
+    backgroundColor: "#14532d",
+  },
+  gradeEasy: {
+    backgroundColor: "#1e3a8a",
+  },
   gradeEmoji: {
-    fontSize: 22,
+    fontSize: 20,
     marginBottom: 4,
   },
   gradeText: {
@@ -399,16 +560,85 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-  gradeAgain: {
-    backgroundColor: "#dc2626",
+  wordsList: {
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    gap: 10,
   },
-  gradeHard: {
-    backgroundColor: "#d97706",
+  wordsHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 2,
+    marginBottom: 6,
   },
-  gradeGood: {
-    backgroundColor: "#059669",
+  wordsCountLabel: {
+    color: "#8b9dc3",
+    fontSize: 13,
+    fontWeight: "600",
   },
-  gradeEasy: {
-    backgroundColor: "#2563eb",
+  wordsRefreshButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e94560",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  wordsRefreshText: {
+    color: "#e94560",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  wordCard: {
+    backgroundColor: "#1a1a2e",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#2a2a40",
+    marginBottom: 10,
+  },
+  wordMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+    gap: 8,
+  },
+  wordSource: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  wordArrow: {
+    color: "#8b9dc3",
+    fontSize: 15,
+  },
+  wordTranslated: {
+    flex: 1,
+    color: "#00d4aa",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "right",
+  },
+  wordMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  wordLang: {
+    color: "#8b9dc3",
+    fontSize: 12,
+    textTransform: "uppercase",
+  },
+  wordReviews: {
+    color: "#fbbf24",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  wordsErrorText: {
+    color: "#fca5a5",
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: "center",
   },
 });
