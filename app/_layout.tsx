@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import { View, Text, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as ScreenOrientation from "expo-screen-orientation";
 import { useDownloadProcessor } from "../hooks/useDownloadProcessor";
 import { useDatabase } from "../hooks/useDatabase";
 import { useLibraryStore } from "../stores/library";
@@ -48,6 +49,27 @@ function PresencePublisher() {
 
 function SelfUpdateChecker() {
   useSelfUpdateCheck();
+  return null;
+}
+
+function OrientationController() {
+  useEffect(() => {
+    if (Platform.OS !== "android" && Platform.OS !== "ios") {
+      return;
+    }
+
+    const lockOrientation = async () => {
+      const orientation = Platform.isTV
+        ? ScreenOrientation.OrientationLock.LANDSCAPE
+        : ScreenOrientation.OrientationLock.PORTRAIT_UP;
+      await ScreenOrientation.lockAsync(orientation);
+    };
+
+    lockOrientation().catch((error) => {
+      console.warn("[orientation] Failed to lock orientation", error);
+    });
+  }, []);
+
   return null;
 }
 
@@ -115,6 +137,7 @@ export default Sentry.wrap(function RootLayout() {
         <NavigationLogger />
         <PresencePublisher />
         <SelfUpdateChecker />
+        <OrientationController />
         <StatusBar style="light" />
         <Stack
           screenOptions={{

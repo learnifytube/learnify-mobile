@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, Pressable, Image, StyleSheet } from "react-native";
+import { View, Text, Pressable, Image, StyleSheet, Platform } from "react-native";
 import type { RemotePlaylist } from "../../types";
 import { api } from "../../services/api";
 import { colors, radius, spacing, fontSize, fontWeight } from "../../theme";
@@ -11,6 +11,7 @@ interface PlaylistCardProps {
   isFavorited?: boolean;
   onPress: () => void;
   onSavePress?: () => void;
+  hasTVPreferredFocus?: boolean;
 }
 
 export function PlaylistCard({
@@ -19,7 +20,10 @@ export function PlaylistCard({
   isFavorited = false,
   onPress,
   onSavePress,
+  hasTVPreferredFocus = false,
 }: PlaylistCardProps) {
+  const isTv = Platform.isTV;
+  const [isFocused, setIsFocused] = useState(false);
   const itemCount = playlist.itemCount ?? 0;
   const [imageError, setImageError] = useState(false);
 
@@ -39,7 +43,17 @@ export function PlaylistCard({
   const showImage = thumbnailUrl && !imageError;
 
   return (
-    <Pressable style={styles.container} onPress={onPress}>
+    <Pressable
+      style={[
+        styles.container,
+        isTv && isFocused && styles.containerFocused,
+      ]}
+      onPress={onPress}
+      focusable={isTv}
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
+    >
       <View style={styles.thumbnailContainer}>
         {showImage ? (
           <Image
@@ -78,7 +92,7 @@ export function PlaylistCard({
         </View>
       </View>
       {onSavePress && (
-        <Pressable style={styles.saveButton} onPress={onSavePress}>
+        <Pressable style={styles.saveButton} onPress={onSavePress} focusable={!isTv}>
           <Heart
             size={20}
             color={isFavorited ? colors.destructive : colors.mutedForeground}
@@ -101,6 +115,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  containerFocused: {
+    borderColor: colors.ring,
+    backgroundColor: colors.cardHover,
+    shadowColor: colors.ring,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
   },
   thumbnailContainer: {
     width: 80,

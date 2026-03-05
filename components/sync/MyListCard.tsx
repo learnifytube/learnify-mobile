@@ -1,4 +1,5 @@
-import { View, Text, Pressable, Image, StyleSheet } from "react-native";
+import { useState } from "react";
+import { View, Text, Pressable, Image, StyleSheet, Platform } from "react-native";
 import type { RemoteMyList } from "../../types";
 import { colors, radius, spacing, fontSize, fontWeight } from "../../theme";
 import { Plus } from "../../theme/icons";
@@ -6,11 +7,26 @@ import { Plus } from "../../theme/icons";
 interface MyListCardProps {
   myList: RemoteMyList;
   onPress: () => void;
+  hasTVPreferredFocus?: boolean;
 }
 
-export function MyListCard({ myList, onPress }: MyListCardProps) {
+export function MyListCard({
+  myList,
+  onPress,
+  hasTVPreferredFocus = false,
+}: MyListCardProps) {
+  const isTv = Platform.isTV;
+  const [isFocused, setIsFocused] = useState(false);
+
   return (
-    <Pressable style={styles.container} onPress={onPress}>
+    <Pressable
+      style={[styles.container, isTv && isFocused && styles.containerFocused]}
+      onPress={onPress}
+      focusable={isTv}
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
+    >
       <View style={styles.thumbnailContainer}>
         {myList.thumbnailUrl ? (
           <Image
@@ -52,6 +68,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  containerFocused: {
+    borderColor: colors.ring,
+    backgroundColor: colors.cardHover,
+    shadowColor: colors.ring,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
   },
   thumbnailContainer: {
     width: 80,

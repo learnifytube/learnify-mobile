@@ -7,6 +7,7 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { Link, router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -36,6 +37,7 @@ import { api } from "../../services/api";
 import { getVideoLocalPath, videoExistsLocally } from "../../services/downloader";
 
 export default function HomeScreen() {
+  const isTv = Platform.isTV;
   const serverUrl = useConnectionStore((s) => s.serverUrl);
   const isConnected = !!serverUrl;
 
@@ -643,7 +645,11 @@ export default function HomeScreen() {
             Connect to your LearnifyTube desktop app to browse and sync videos
           </Text>
           <Link href="/(tabs)/settings" asChild>
-            <Pressable style={styles.connectButton}>
+            <Pressable
+              style={styles.connectButton}
+              focusable={isTv}
+              hasTVPreferredFocus={isTv}
+            >
               <Text style={styles.connectButtonText}>Go to Settings</Text>
             </Pressable>
           </Link>
@@ -780,7 +786,12 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.container} edges={["top"]}>
         {/* Header with back button */}
         <View style={styles.videoHeader}>
-          <Pressable style={styles.backButton} onPress={handleBackPress}>
+          <Pressable
+            style={styles.backButton}
+            onPress={handleBackPress}
+            focusable={isTv}
+            hasTVPreferredFocus={isTv}
+          >
             <ArrowLeft size={18} color={colors.foreground} />
           </Pressable>
           <View style={styles.headerTitleContainer}>
@@ -802,6 +813,7 @@ export default function HomeScreen() {
               ]}
               onPress={handleSavePlaylistOffline}
               disabled={isSaveActionDone}
+              focusable={isTv}
             >
               <Text style={styles.saveOfflineButtonText}>
                 {isSaveActionDone
@@ -837,6 +849,7 @@ export default function HomeScreen() {
                 onPress={
                   selectedVideoIds.size > 0 ? clearVideoSelection : selectAllVideos
                 }
+                focusable={isTv}
               >
                 <Text style={styles.toolbarButtonText}>
                   {selectedVideoIds.size > 0
@@ -846,7 +859,11 @@ export default function HomeScreen() {
               </Pressable>
             )}
             {selectedVideoIds.size > 0 && (
-              <Pressable style={styles.syncAllButton} onPress={handleSyncSelected}>
+              <Pressable
+                style={styles.syncAllButton}
+                onPress={handleSyncSelected}
+                focusable={isTv}
+              >
                 <Text style={styles.syncAllButtonText}>
                   Sync {selectedVideoIds.size} video
                   {selectedVideoIds.size !== 1 ? "s" : ""}
@@ -854,7 +871,11 @@ export default function HomeScreen() {
               </Pressable>
             )}
             {playableCount > 0 && selectedVideoIds.size === 0 && (
-              <Pressable style={styles.playAllButton} onPress={handlePlayAll}>
+              <Pressable
+                style={styles.playAllButton}
+                onPress={handlePlayAll}
+                focusable={isTv}
+              >
                 <Play size={14} color={colors.foreground} fill={colors.foreground} />
                 <Text style={styles.playAllButtonText}>
                   Play All ({playableCount})
@@ -887,7 +908,7 @@ export default function HomeScreen() {
             numColumns={2}
             columnWrapperStyle={styles.gridRow}
             contentContainerStyle={styles.gridList}
-            renderItem={({ item }) => (
+            renderItem={({ item, index }) => (
               <VideoGridCard
                 video={item}
                 pending={
@@ -896,6 +917,7 @@ export default function HomeScreen() {
                     : { type: "none" }
                 }
                 onPress={() => handleSubscriptionVideoPress(item)}
+                hasTVPreferredFocus={isTv && index === 0}
               />
             )}
           />
@@ -958,7 +980,7 @@ export default function HomeScreen() {
               numColumns={2}
               columnWrapperStyle={styles.gridRow}
               contentContainerStyle={styles.gridList}
-              renderItem={({ item }) => (
+              renderItem={({ item, index }) => (
                 <VideoGridCard
                   video={item}
                   pending={
@@ -967,6 +989,7 @@ export default function HomeScreen() {
                       : { type: "none" }
                   }
                   onPress={() => handleSubscriptionVideoPress(item)}
+                  hasTVPreferredFocus={isTv && index === 0}
                 />
               )}
               refreshing={isLoadingSubscriptions}

@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Dimensions,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import type { RemoteChannel } from "../../types";
 import {
@@ -26,6 +27,7 @@ const CARD_WIDTH = (SCREEN_WIDTH - CARD_PADDING * 2 - CARD_GAP) / 2;
 interface ChannelCardProps {
   channel: RemoteChannel;
   onPress: () => void;
+  hasTVPreferredFocus?: boolean;
 }
 
 function formatLastUpdated(dateStr?: string | null) {
@@ -42,7 +44,13 @@ function formatLastUpdated(dateStr?: string | null) {
   return `${Math.floor(diffDays / 30)}mo ago`;
 }
 
-export function ChannelCard({ channel, onPress }: ChannelCardProps) {
+export function ChannelCard({
+  channel,
+  onPress,
+  hasTVPreferredFocus = false,
+}: ChannelCardProps) {
+  const isTv = Platform.isTV;
+  const [isFocused, setIsFocused] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const lastUpdated = formatLastUpdated(channel.lastUpdatedAt);
@@ -54,8 +62,16 @@ export function ChannelCard({ channel, onPress }: ChannelCardProps) {
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.container, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.container,
+        isTv && isFocused && styles.focused,
+        pressed && styles.pressed,
+      ]}
       onPress={onPress}
+      focusable={isTv}
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
     >
       <View style={styles.thumbnailContainer}>
         {/* Always render placeholder behind image */}
@@ -125,6 +141,15 @@ const styles = StyleSheet.create({
   pressed: {
     backgroundColor: colors.muted,
     transform: [{ scale: 0.98 }],
+  },
+  focused: {
+    borderColor: colors.ring,
+    backgroundColor: colors.cardHover,
+    shadowColor: colors.ring,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
   },
   thumbnailContainer: {
     width: AVATAR_SIZE,

@@ -1,4 +1,11 @@
-import { View, Text, FlatList, ActivityIndicator, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  FlatList,
+  ActivityIndicator,
+  StyleSheet,
+  Platform,
+} from "react-native";
 import type { RemoteChannel } from "../../types";
 import { ChannelCard } from "./ChannelCard";
 
@@ -17,6 +24,8 @@ export function ChannelList({
   onChannelPress,
   onRefresh,
 }: ChannelListProps) {
+  const isTv = Platform.isTV;
+
   if (isLoading && channels.length === 0) {
     return (
       <View style={styles.centered}>
@@ -53,8 +62,12 @@ export function ChannelList({
       keyExtractor={(item) => item.channelId}
       numColumns={2}
       columnWrapperStyle={styles.row}
-      renderItem={({ item }) => (
-        <ChannelCard channel={item} onPress={() => onChannelPress(item)} />
+      renderItem={({ item, index }) => (
+        <ChannelCard
+          channel={item}
+          onPress={() => onChannelPress(item)}
+          hasTVPreferredFocus={isTv && index === 0}
+        />
       )}
       contentContainerStyle={styles.list}
       refreshing={isLoading}

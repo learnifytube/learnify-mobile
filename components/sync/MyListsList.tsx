@@ -1,4 +1,11 @@
-import { View, Text, FlatList, ActivityIndicator, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  FlatList,
+  ActivityIndicator,
+  StyleSheet,
+  Platform,
+} from "react-native";
 import type { RemoteMyList } from "../../types";
 import { MyListCard } from "./MyListCard";
 
@@ -17,6 +24,8 @@ export function MyListsList({
   onMyListPress,
   onRefresh,
 }: MyListsListProps) {
+  const isTv = Platform.isTV;
+
   if (isLoading && myLists.length === 0) {
     return (
       <View style={styles.centered}>
@@ -51,8 +60,12 @@ export function MyListsList({
       style={styles.flexList}
       data={myLists}
       keyExtractor={(item) => item.id}
-      renderItem={({ item }) => (
-        <MyListCard myList={item} onPress={() => onMyListPress(item)} />
+      renderItem={({ item, index }) => (
+        <MyListCard
+          myList={item}
+          onPress={() => onMyListPress(item)}
+          hasTVPreferredFocus={isTv && index === 0}
+        />
       )}
       contentContainerStyle={styles.list}
       refreshing={isLoading}

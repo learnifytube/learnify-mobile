@@ -3,7 +3,7 @@
     "name": "LearnifyTube",
     "slug": "learnify-mobile",
     "version": "1.0.9",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "scheme": "learnify",
     "userInterfaceStyle": "automatic",
