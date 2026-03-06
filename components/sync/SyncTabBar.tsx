@@ -4,20 +4,22 @@ import { View,
   Pressable,
 } from "react-native";
 import type { BrowseTab } from "../../types";
-import { colors, radius, spacing, fontSize, fontWeight } from "../../theme";
+import { colors, spacing, fontSize, fontWeight } from "../../theme";
+
+const DEFAULT_TABS: { key: BrowseTab; label: string }[] = [
+  { key: "mylists", label: "My Lists" },
+  { key: "channels", label: "Channels" },
+  { key: "playlists", label: "Playlists" },
+];
 
 interface SyncTabBarProps {
   activeTab: BrowseTab;
   onTabChange: (tab: BrowseTab) => void;
+  /** Restrict to a subset of tabs (e.g. ["mylists", "playlists"] for Library screen). */
+  tabs?: { key: BrowseTab; label: string }[];
 }
 
-export function SyncTabBar({ activeTab, onTabChange }: SyncTabBarProps) {
-  const tabs: { key: BrowseTab; label: string }[] = [
-    { key: "mylists", label: "My Lists" },
-    { key: "channels", label: "Channels" },
-    { key: "playlists", label: "Playlists" },
-    { key: "subscriptions", label: "Subs" },
-  ];
+export function SyncTabBar({ activeTab, onTabChange, tabs = DEFAULT_TABS }: SyncTabBarProps) {
 
   return (
     <View style={styles.container}>

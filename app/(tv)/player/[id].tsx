@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { DeviceEventEmitter, View, Text, StyleSheet } from "react-native";
 import { useLocalSearchParams, router, type Href } from "expo-router";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,6 +17,7 @@ type SourcePrepareState = "idle" | "preparing" | "ready" | "failed";
 
 const SERVER_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const SERVER_DOWNLOAD_POLL_MS = 2000;
+const REMOTE_NAV_TIMEOUT_MS = 4500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -151,8 +152,26 @@ export default function TVPlayerScreen() {
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [prepareProgress, setPrepareProgress] = useState<number | null>(null);
   const [prepareRetryVersion, setPrepareRetryVersion] = useState(0);
+  const [isRemoteNavVisible, setIsRemoteNavVisible] = useState(true);
   const navigationLockVideoIdRef = useRef<string | null>(null);
   const prefetchedNextVideoIdRef = useRef<string | null>(null);
+  const remoteNavTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearRemoteNavTimeout = useCallback(() => {
+    if (remoteNavTimeoutRef.current) {
+      clearTimeout(remoteNavTimeoutRef.current);
+      remoteNavTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showRemoteNav = useCallback(() => {
+    setIsRemoteNavVisible(true);
+    clearRemoteNavTimeout();
+    remoteNavTimeoutRef.current = setTimeout(() => {
+      setIsRemoteNavVisible(false);
+      remoteNavTimeoutRef.current = null;
+    }, REMOTE_NAV_TIMEOUT_MS);
+  }, [clearRemoteNavTimeout]);
 
   const playlistIndex = useMemo(() => {
     if (!id) return -1;
@@ -269,6 +288,35 @@ export default function TVPlayerScreen() {
   const hasPrevious = hasPlaylistContext && playlistIndex > 0;
   const hasNext = hasPlaylistContext && playlistIndex < playlistVideos.length - 1;
   const nextVideo = hasNext ? playlistVideos[playlistIndex + 1] : null;
+  const playbackModeLabel = localPath ? "Offline" : "Streaming";
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      "onHWKeyEvent",
+      (event: { eventType?: string; eventKeyAction?: number }) => {
+        const eventType = event?.eventType;
+        if (!eventType || eventType === "focus" || eventType === "blur") {
+          return;
+        }
+        // Android sends ACTION_DOWN = 0 and ACTION_UP = 1. Show overlay only once per key press.
+        if (typeof event.eventKeyAction === "number" && event.eventKeyAction !== 0) {
+          return;
+        }
+        showRemoteNav();
+      }
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [showRemoteNav]);
+
+  useEffect(() => {
+    showRemoteNav();
+    return () => {
+      clearRemoteNavTimeout();
+    };
+  }, [clearRemoteNavTimeout, showRemoteNav]);
 
   const goToIndex = useCallback(
     (targetIndex: number) => {
@@ -391,48 +439,69 @@ export default function TVPlayerScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <View style={styles.header}>
-        <TVFocusPressable style={styles.backButton} onPress={() => router.back()} hasTVPreferredFocus>
-          <Text style={styles.backButtonText}>Back</Text>
-        </TVFocusPressable>
-        <View style={styles.navRow}>
-          <TVFocusPressable
-            style={[styles.navButton, !hasPrevious && styles.navButtonDisabled]}
-            onPress={() => goToIndex(playlistIndex - 1)}
-            disabled={!hasPrevious}
-          >
-            <Text style={styles.navButtonText}>Previous</Text>
-          </TVFocusPressable>
-          <TVFocusPressable
-            style={[styles.navButton, !hasNext && styles.navButtonDisabled]}
-            onPress={() => goToIndex(playlistIndex + 1)}
-            disabled={!hasNext}
-          >
-            <Text style={styles.navButtonText}>Next</Text>
-          </TVFocusPressable>
-        </View>
-      </View>
+    <View style={styles.fullscreenContainer}>
+      <VideoView player={player} style={styles.video} contentFit="contain" />
 
-      <VideoView player={player} style={styles.video} />
+      {isRemoteNavVisible ? (
+        <SafeAreaView style={styles.overlaySafeArea} edges={["top"]}>
+          <View style={styles.overlayTopRow}>
+            <View style={styles.titleChip}>
+              <Text style={styles.titleChipText} numberOfLines={1}>
+                {video?.title ?? "Now Playing"}
+              </Text>
+              <Text style={styles.titleChipMeta} numberOfLines={1}>
+                {nextVideo && prefetchState === "loading"
+                  ? `Loading next: ${nextVideo.title}`
+                  : nextVideo
+                    ? `Up next: ${nextVideo.title}`
+                    : playbackModeLabel}
+              </Text>
+            </View>
 
-      <View style={styles.meta}>
-        <Text style={styles.title} numberOfLines={2}>
-          {video?.title ?? "Now Playing"}
-        </Text>
-        <Text style={styles.channel}>{video?.channelTitle ?? "LearnifyTube"}</Text>
-        <Text style={styles.badge}>{localPath ? "Offline" : "Streaming"}</Text>
-        {nextVideo ? (
-          <Text style={styles.nextLabel} numberOfLines={1}>
-            {prefetchState === "loading"
-              ? `Loading up next: ${nextVideo.title}`
-              : prefetchState === "ready"
-                ? `Up next ready: ${nextVideo.title}`
-                : `Up next: ${nextVideo.title}`}
-          </Text>
-        ) : null}
-      </View>
-    </SafeAreaView>
+            <View style={styles.navFabRow}>
+              <TVFocusPressable
+                style={styles.navFabButton}
+                onPress={() => {
+                  showRemoteNav();
+                  router.back();
+                }}
+                onFocus={showRemoteNav}
+                onBlur={showRemoteNav}
+                hasTVPreferredFocus={isRemoteNavVisible}
+              >
+                <Text style={styles.navFabText}>Back</Text>
+              </TVFocusPressable>
+
+              <TVFocusPressable
+                style={[styles.navFabButton, !hasPrevious && styles.navButtonDisabled]}
+                onPress={() => {
+                  showRemoteNav();
+                  goToIndex(playlistIndex - 1);
+                }}
+                onFocus={showRemoteNav}
+                onBlur={showRemoteNav}
+                disabled={!hasPrevious}
+              >
+                <Text style={styles.navFabText}>Prev</Text>
+              </TVFocusPressable>
+
+              <TVFocusPressable
+                style={[styles.navFabButton, !hasNext && styles.navButtonDisabled]}
+                onPress={() => {
+                  showRemoteNav();
+                  goToIndex(playlistIndex + 1);
+                }}
+                onFocus={showRemoteNav}
+                onBlur={showRemoteNav}
+                disabled={!hasNext}
+              >
+                <Text style={styles.navFabText}>Next</Text>
+              </TVFocusPressable>
+            </View>
+          </View>
+        </SafeAreaView>
+      ) : null}
+    </View>
   );
 }
 
@@ -443,15 +512,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingBottom: 20,
   },
-  header: {
-    marginBottom: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  navRow: {
-    flexDirection: "row",
-    gap: 12,
+  fullscreenContainer: {
+    flex: 1,
+    backgroundColor: "#000",
   },
   backButton: {
     borderRadius: 14,
@@ -477,41 +540,67 @@ const styles = StyleSheet.create({
   navButtonDisabled: {
     opacity: 0.5,
   },
-  navButtonText: {
-    color: "#fffef2",
-    fontSize: 19,
-    fontWeight: "900",
-  },
   video: {
-    width: "100%",
-    height: 560,
-    borderRadius: 20,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "#000",
-    overflow: "hidden",
   },
-  meta: {
-    marginTop: 16,
-    gap: 8,
+  overlaySafeArea: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 28,
+    paddingTop: 10,
   },
-  title: {
+  overlayTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  titleChip: {
+    flex: 1,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    borderWidth: 2,
+    borderColor: "rgba(255, 255, 255, 0.28)",
+  },
+  titleChipText: {
     color: "#fffef2",
-    fontSize: 34,
-    fontWeight: "900",
-  },
-  channel: {
-    color: "#e5f2ff",
-    fontSize: 22,
-    fontWeight: "700",
-  },
-  badge: {
-    color: "#ffe48f",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  nextLabel: {
-    color: "#b3f8d7",
     fontSize: 18,
     fontWeight: "800",
+  },
+  titleChipMeta: {
+    marginTop: 4,
+    color: "#dbeafe",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  navFabRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  navFabButton: {
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "#ffd93d",
+    backgroundColor: "#ff8a00",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    minWidth: 102,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  navFabText: {
+    color: "#fffef2",
+    fontSize: 18,
+    fontWeight: "900",
   },
   centered: {
     flex: 1,
@@ -522,6 +611,12 @@ const styles = StyleSheet.create({
     color: "#fecaca",
     fontSize: 22,
     fontWeight: "700",
+  },
+  channel: {
+    color: "#e5f2ff",
+    fontSize: 20,
+    fontWeight: "700",
+    marginTop: 8,
   },
   retryPrepareButton: {
     marginTop: 16,

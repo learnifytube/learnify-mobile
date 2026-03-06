@@ -11,6 +11,7 @@ import {
   ScrollView,
   Image,
   Pressable,
+  Dimensions,
 } from "react-native";
 import { Link, useRouter, type Href } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -27,6 +28,11 @@ import {
 import * as watchHistoryRepo from "../../../db/repositories/watchHistory";
 import { getVideoLocalPath } from "../../../services/downloader";
 import { colors, spacing, radius, fontSize, fontWeight } from "../../../theme";
+
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const GRID_PADDING = spacing.sm + 2;
+const GRID_GAP = spacing.sm + 2;
+const VIDEO_CARD_WIDTH = (SCREEN_WIDTH - GRID_PADDING * 2 - GRID_GAP) / 2;
 
 type SavedPlaylistInfo = {
   id: string;
@@ -124,7 +130,7 @@ function SavedPlaylistCard({
   );
 }
 
-export default function ListsScreen() {
+export function SavedTabContent() {
   const router = useRouter();
 
   const videos = useLibraryStore((state) => state.videos);
@@ -284,9 +290,7 @@ export default function ListsScreen() {
     );
   };
 
-  return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      {videos.length === 0 && savedPlaylists.length === 0 ? (
+  return videos.length === 0 && savedPlaylists.length === 0 ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyIcon}>📚</Text>
           <Text style={styles.emptyTitle}>No Videos Yet</Text>
@@ -357,14 +361,21 @@ export default function ListsScreen() {
                     resumeLabel={
                       resumeSeconds > 0 ? createResumeLabel(resumeSeconds) : undefined
                     }
-                    style={styles.downloadedVideoCard}
+                    style={[styles.downloadedVideoCard, { width: VIDEO_CARD_WIDTH }]}
                   />
                 );
               })}
             </View>
           )}
         </ScrollView>
-      )}
+      );
+
+}
+
+export default function ListsScreen() {
+  return (
+    <SafeAreaView style={styles.container} edges={["top"]}>
+      <SavedTabContent />
     </SafeAreaView>
   );
 }
@@ -502,14 +513,13 @@ const styles = StyleSheet.create({
   videosGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    paddingHorizontal: spacing.sm + 2,
+    paddingHorizontal: GRID_PADDING,
     paddingTop: spacing.sm,
-    justifyContent: "space-between",
+    gap: GRID_GAP,
   },
   downloadedVideoCard: {
+    width: VIDEO_CARD_WIDTH,
     flex: 0,
-    width: "48%",
-    maxWidth: "48%",
     margin: 0,
     marginBottom: spacing.sm + 2,
   },

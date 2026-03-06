@@ -429,13 +429,16 @@ export default function PlayerScreen() {
     [video, localVideoPath]
   );
 
-  const player = useVideoPlayer(videoSourceUrl || "", (player) => {
-    player.loop = false;
-    player.timeUpdateEventInterval = 0.5; // Emit timeUpdate every 0.5 seconds
-    player.staysActiveInBackground = true;
-    player.showNowPlayingNotification = true;
-    player.play();
+  // Only create player when we have a valid source to avoid Fabric viewState errors
+  // (mounting VideoView with an empty source can cause "Unable to find viewState for tag")
+  const player = useVideoPlayer(videoSourceUrl ?? "", (p) => {
+    p.loop = false;
+    p.timeUpdateEventInterval = 0.5;
+    p.staysActiveInBackground = true;
+    p.showNowPlayingNotification = true;
+    p.play();
   });
+  const hasValidSource = Boolean(videoSourceUrl);
 
   useEffect(() => {
     if (!player || initialSeekDoneRef.current) return;
@@ -767,7 +770,14 @@ export default function PlayerScreen() {
         )}
       </View>
 
-      <VideoView player={player} style={styles.video} />
+      {hasValidSource ? (
+        <VideoView player={player} style={styles.video} />
+      ) : (
+        <View style={[styles.video, styles.videoPlaceholder]}>
+          <ActivityIndicator size="large" color="#e94560" />
+          <Text style={styles.videoPlaceholderText}>Loading video...</Text>
+        </View>
+      )}
 
       <View style={styles.infoContainer}>
         <Text style={styles.title} numberOfLines={2}>
@@ -1009,6 +1019,15 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH,
     height: VIDEO_HEIGHT,
     backgroundColor: "#000",
+  },
+  videoPlaceholder: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  videoPlaceholderText: {
+    color: "#8f9cc7",
+    fontSize: 14,
+    marginTop: 12,
   },
   infoContainer: {
     padding: 16,

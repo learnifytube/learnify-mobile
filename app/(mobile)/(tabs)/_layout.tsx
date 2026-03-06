@@ -1,7 +1,7 @@
 import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../../theme";
-import { Home, Layers, Clock, Library, Settings } from "../../../theme/icons";
+import { Radio, Layers, Clock, Library, Settings } from "../../../theme/icons";
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -39,10 +39,10 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
+          title: "Channels",
           headerTitle: "LearnifyTube",
           tabBarIcon: ({ focused, color }) => (
-            <Home size={22} color={color} strokeWidth={focused ? 2.5 : 2} />
+            <Radio size={22} color={color} strokeWidth={focused ? 2.5 : 2} />
           ),
         }}
       />
@@ -65,12 +65,18 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="lists"
+        name="library"
         options={{
-          title: "My Lists",
+          title: "Library",
           tabBarIcon: ({ focused, color }) => (
             <Library size={22} color={color} strokeWidth={focused ? 2.5 : 2} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="lists"
+        options={{
+          href: null,
         }}
       />
       <Tabs.Screen

@@ -1,133 +1,99 @@
 import {
   useEffect,
   useCallback,
-  useState } from "react";
+  useState,
+} from "react";
 import {
   View,
   Text,
+  StyleSheet,
   FlatList,
   ActivityIndicator,
-  StyleSheet,
   Alert,
   Pressable,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useSyncStore } from "../../stores/sync";
-import { useConnectionStore } from "../../stores/connection";
-import { useLibraryStore } from "../../stores/library";
-import { useDownloadStore } from "../../stores/downloads";
-import { usePlaybackStore } from "../../stores/playback";
-import { savePlaylist, isPlaylistSaved } from "../../db/repositories/playlists";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useLibraryStore } from "../../../stores/library";
+import { useDownloadStore } from "../../../stores/downloads";
+import { useConnectionStore } from "../../../stores/connection";
+import { useSyncStore } from "../../../stores/sync";
+import { usePlaybackStore } from "../../../stores/playback";
+import { savePlaylist, isPlaylistSaved } from "../../../db/repositories/playlists";
 import {
-  SyncTabBar,
-  ChannelList,
   PlaylistList,
-  VideoListItem,
   MyListsList,
-} from "../../components/sync";
-import type {
-  RemoteChannel,
-  RemotePlaylist,
-  RemoteVideoWithStatus,
-  RemoteMyList,
-} from "../../types";
-import type { StreamingVideo } from "../../stores/playback";
-import { api } from "../../services/api";
-import { getVideoLocalPath, videoExistsLocally } from "../../services/downloader";
+  VideoListItem,
+} from "../../../components/sync";
+import { SavedTabContent } from "./lists";
+import { colors, spacing, fontSize, fontWeight } from "../../../theme";
+import { ArrowLeft } from "../../../theme/icons";
+import type { RemotePlaylist, RemoteMyList, RemoteVideoWithStatus } from "../../../types";
+import type { StreamingVideo } from "../../../stores/playback";
+import { getVideoLocalPath } from "../../../services/downloader";
 
-export default function SyncScreen() {
+type LibraryTab = "mylists" | "playlists" | "saved";
+
+const LIBRARY_TABS: { key: LibraryTab; label: string }[] = [
+  { key: "mylists", label: "My Lists" },
+  { key: "playlists", label: "Playlists" },
+  { key: "saved", label: "Saved" },
+];
+
+export default function LibraryScreen() {
   const router = useRouter();
   const serverUrl = useConnectionStore((s) => s.serverUrl);
   const libraryVideos = useLibraryStore((s) => s.videos);
   const queueDownload = useDownloadStore((s) => s.queueDownload);
   const startPlaylist = usePlaybackStore((s) => s.startPlaylist);
 
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("mylists");
+
   const {
-    activeTab,
-    setActiveTab,
-    channels,
     playlists,
     myLists,
-    isLoadingChannels,
     isLoadingPlaylists,
     isLoadingVideos,
     isLoadingMyLists,
-    channelsError,
     playlistsError,
     myListsError,
     videosError,
-    selectedChannel,
-    channelVideos,
     selectedPlaylist,
     playlistVideos,
     selectedMyList,
     myListVideos,
     selectedVideoIds,
-    fetchChannels,
+    favoritePlaylistIds,
     fetchPlaylists,
     fetchMyLists,
-    fetchChannelVideos,
     fetchPlaylistVideos,
     fetchMyListVideos,
-    selectChannel,
     selectPlaylist,
     selectMyList,
     toggleVideoSelection,
     selectAllVideos,
     clearVideoSelection,
+    addToFavorites,
+    removeFromFavorites,
   } = useSyncStore();
 
-  // Set of video IDs already synced to mobile
   const syncedVideoIds = new Set(libraryVideos.map((v) => v.id));
-
-  const [pendingVideoIds, setPendingVideoIds] = useState<Set<string>>(new Set());
   const [, bumpSavedPlaylistVersion] = useState(0);
 
-  const setPending = useCallback((videoId: string, isPending: boolean) => {
-    setPendingVideoIds((prev) => {
-      const next = new Set(prev);
-      if (isPending) {
-        next.add(videoId);
-      } else {
-        next.delete(videoId);
-      }
-      return next;
-    });
-  }, []);
-
-  // Fetch data when tab changes or on mount
   useEffect(() => {
     if (!serverUrl) return;
-
-    if (activeTab === "channels" && channels.length === 0) {
-      fetchChannels(serverUrl);
-    } else if (activeTab === "playlists" && playlists.length === 0) {
-      fetchPlaylists(serverUrl);
-    } else if (activeTab === "mylists" && myLists.length === 0) {
+    if (libraryTab === "mylists" && myLists.length === 0) {
       fetchMyLists(serverUrl);
+    } else if (libraryTab === "playlists" && playlists.length === 0) {
+      fetchPlaylists(serverUrl);
     }
-  }, [
-    activeTab,
-    serverUrl,
-    channels.length,
-    playlists.length,
-    myLists.length,
-    fetchChannels,
-    fetchPlaylists,
-    fetchMyLists,
-  ]);
+  }, [libraryTab, serverUrl, myLists.length, playlists.length, fetchMyLists, fetchPlaylists]);
 
   useEffect(() => {
     if (!serverUrl) {
-      setPendingVideoIds(new Set());
       clearVideoSelection();
     }
   }, [serverUrl, clearVideoSelection]);
-
-  const hasCachedData =
-    channels.length > 0 ||
-    playlists.length > 0 ||
-    myLists.length > 0;
 
   const showOfflineAlert = useCallback(() => {
     Alert.alert(
@@ -135,22 +101,6 @@ export default function SyncScreen() {
       "Reconnect to your desktop app to refresh or sync new videos."
     );
   }, []);
-
-  const handleRefreshChannels = useCallback(() => {
-    if (serverUrl) {
-      fetchChannels(serverUrl);
-      return;
-    }
-    showOfflineAlert();
-  }, [serverUrl, fetchChannels, showOfflineAlert]);
-
-  const handleRefreshPlaylists = useCallback(() => {
-    if (serverUrl) {
-      fetchPlaylists(serverUrl);
-      return;
-    }
-    showOfflineAlert();
-  }, [serverUrl, fetchPlaylists, showOfflineAlert]);
 
   const handleRefreshMyLists = useCallback(() => {
     if (serverUrl) {
@@ -160,16 +110,13 @@ export default function SyncScreen() {
     showOfflineAlert();
   }, [serverUrl, fetchMyLists, showOfflineAlert]);
 
-  const handleChannelPress = useCallback(
-    (channel: RemoteChannel) => {
-      if (serverUrl) {
-        fetchChannelVideos(serverUrl, channel);
-        return;
-      }
-      selectChannel(channel);
-    },
-    [serverUrl, fetchChannelVideos, selectChannel]
-  );
+  const handleRefreshPlaylists = useCallback(() => {
+    if (serverUrl) {
+      fetchPlaylists(serverUrl);
+      return;
+    }
+    showOfflineAlert();
+  }, [serverUrl, fetchPlaylists, showOfflineAlert]);
 
   const handlePlaylistPress = useCallback(
     (playlist: RemotePlaylist) => {
@@ -194,66 +141,12 @@ export default function SyncScreen() {
   );
 
   const handleBackPress = useCallback(() => {
-    if (selectedChannel) {
-      selectChannel(null);
-    } else if (selectedPlaylist) {
+    if (selectedPlaylist) {
       selectPlaylist(null);
     } else if (selectedMyList) {
       selectMyList(null);
     }
-  }, [
-    selectedChannel,
-    selectedPlaylist,
-    selectedMyList,
-    selectChannel,
-    selectPlaylist,
-    selectMyList,
-  ]);
-
-  const sleep = useCallback(
-    (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-    []
-  );
-
-  const waitForServerDownload = useCallback(
-    async (videoId: string) => {
-      if (!serverUrl) throw new Error("Not connected to server");
-      const timeoutMs = 10 * 60 * 1000;
-      const intervalMs = 2000;
-      const start = Date.now();
-
-      while (Date.now() - start < timeoutMs) {
-        const status = await api.getServerDownloadStatus(serverUrl, videoId);
-        if (status.status === "completed") return;
-        if (status.status === "failed") {
-          throw new Error(status.error || "Server download failed");
-        }
-        await sleep(intervalMs);
-      }
-
-      throw new Error("Server download timed out");
-    },
-    [serverUrl, sleep]
-  );
-
-  const waitForLocalVideo = useCallback(
-    async (videoId: string) => {
-      const timeoutMs = 10 * 60 * 1000;
-      const intervalMs = 1000;
-      const start = Date.now();
-
-      while (Date.now() - start < timeoutMs) {
-        if (videoExistsLocally(videoId)) return;
-        await sleep(intervalMs);
-      }
-
-      throw new Error("Sync to mobile timed out");
-    },
-    [sleep]
-  );
+  }, [selectedPlaylist, selectedMyList, selectPlaylist, selectMyList]);
 
   const handlePlayVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
@@ -280,12 +173,7 @@ export default function SyncScreen() {
       let contextTitle = "Now Playing";
       let contextId = `single-${video.id}`;
       let currentVideos: RemoteVideoWithStatus[] = [];
-
-      if (selectedChannel) {
-        contextTitle = selectedChannel.channelTitle;
-        contextId = `channel-${selectedChannel.channelId}`;
-        currentVideos = channelVideos;
-      } else if (selectedPlaylist) {
+      if (selectedPlaylist) {
         contextTitle = selectedPlaylist.title;
         contextId = `playlist-${selectedPlaylist.playlistId}`;
         currentVideos = playlistVideos;
@@ -296,31 +184,28 @@ export default function SyncScreen() {
       }
 
       const playlistStreamingVideos: StreamingVideo[] = currentVideos.map(
-        (v) => {
-          const local =
+        (v) => ({
+          id: v.id,
+          title: v.title,
+          channelTitle: v.channelTitle,
+          duration: v.duration,
+          thumbnailUrl: v.thumbnailUrl ?? undefined,
+          localPath:
             getVideoLocalPath(v.id) ??
-            libraryVideos.find((lv) => lv.id === v.id)?.localPath;
-          return {
-            id: v.id,
-            title: v.title,
-            channelTitle: v.channelTitle,
-            duration: v.duration,
-            thumbnailUrl: v.thumbnailUrl ?? undefined,
-            localPath: local ?? undefined,
-          };
-        }
+            libraryVideos.find((lv) => lv.id === v.id)?.localPath ??
+            undefined,
+        })
       );
       const playablePlaylistVideos = serverUrl
         ? playlistStreamingVideos
         : playlistStreamingVideos.filter((v) => !!v.localPath);
-
-      const startIndex = playablePlaylistVideos.findIndex(
-        (v) => v.id === video.id
-      );
+      const startIndex = playablePlaylistVideos.findIndex((v) => v.id === video.id);
       const fallbackVideos =
         serverUrl || streamingVideo.localPath ? [streamingVideo] : [];
       const videosToPlay =
-        playablePlaylistVideos.length > 0 ? playablePlaylistVideos : fallbackVideos;
+        playablePlaylistVideos.length > 0
+          ? playablePlaylistVideos
+          : fallbackVideos;
 
       if (videosToPlay.length === 0) {
         Alert.alert(
@@ -337,16 +222,13 @@ export default function SyncScreen() {
         startIndex >= 0 ? startIndex : 0,
         serverUrl ?? undefined
       );
-
       router.push(`/player/${video.id}`);
     },
     [
       serverUrl,
       libraryVideos,
-      selectedChannel,
       selectedPlaylist,
       selectedMyList,
-      channelVideos,
       playlistVideos,
       myListVideos,
       startPlaylist,
@@ -357,7 +239,6 @@ export default function SyncScreen() {
   const handleSyncVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
       if (!serverUrl || video.downloadStatus !== "completed") return;
-
       queueDownload(video.id, {
         title: video.title,
         channelTitle: video.channelTitle,
@@ -369,11 +250,7 @@ export default function SyncScreen() {
   );
 
   const handleSyncSelected = useCallback(() => {
-    let videos: RemoteVideoWithStatus[] = [];
-    if (activeTab === "channels") videos = channelVideos;
-    else if (activeTab === "playlists") videos = playlistVideos;
-    else if (activeTab === "mylists") videos = myListVideos;
-
+    const videos = selectedPlaylist ? playlistVideos : myListVideos;
     for (const video of videos) {
       if (
         selectedVideoIds.has(video.id) &&
@@ -390,8 +267,7 @@ export default function SyncScreen() {
     }
     clearVideoSelection();
   }, [
-    activeTab,
-    channelVideos,
+    selectedPlaylist,
     playlistVideos,
     myListVideos,
     selectedVideoIds,
@@ -400,100 +276,74 @@ export default function SyncScreen() {
     clearVideoSelection,
   ]);
 
-  if (!serverUrl && !hasCachedData) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Not connected to server</Text>
-        <Pressable
-          style={styles.connectButton}
-          onPress={() => router.push("/(mobile)/(tabs)/settings")}
-        >
-          <Text style={styles.connectButtonText}>Connect</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  // Video list view for selected channel/playlist/subscription/mylist
-  const isShowingVideos = selectedChannel || selectedPlaylist || selectedMyList;
-
-  const getCurrentVideos = () => {
-    if (selectedChannel) return channelVideos;
-    if (selectedPlaylist) return playlistVideos;
-    if (selectedMyList) return myListVideos;
-    return [];
-  };
-  const currentVideos = getCurrentVideos();
-
-  const getCurrentTitle = () => {
-    if (selectedChannel) return selectedChannel.channelTitle;
-    if (selectedPlaylist) return selectedPlaylist.title;
-    if (selectedMyList) return selectedMyList.name;
-    return "";
-  };
-  const currentTitle = getCurrentTitle();
-
-  if (isShowingVideos) {
-    const isChannelDetail = Boolean(selectedChannel);
-    const saveTarget = (() => {
-      if (selectedChannel) {
-        return {
-          playlistId: `channel_${selectedChannel.channelId}`,
-          playlistTitle: selectedChannel.channelTitle,
-          playlistType: "channel",
-          sourceId: selectedChannel.channelId,
-          thumbnailUrl: selectedChannel.thumbnailUrl,
-        };
+  const handlePlaylistSavePress = useCallback(
+    async (playlist: RemotePlaylist) => {
+      if (!serverUrl) return;
+      const entityType =
+        playlist.type === "custom" ? "custom_playlist" : "channel_playlist";
+      const isFavorited = favoritePlaylistIds.has(playlist.playlistId);
+      try {
+        if (isFavorited) {
+          await removeFromFavorites(serverUrl, entityType, playlist.playlistId);
+        } else {
+          await addToFavorites(serverUrl, entityType, playlist.playlistId);
+        }
+      } catch (error) {
+        console.error("[Library] Failed to toggle favorite:", error);
       }
+    },
+    [serverUrl, favoritePlaylistIds, addToFavorites, removeFromFavorites]
+  );
 
-      if (selectedPlaylist) {
-        return {
+  const isShowingVideos = selectedPlaylist || selectedMyList;
+  const currentVideos = selectedPlaylist
+    ? playlistVideos
+    : selectedMyList
+      ? myListVideos
+      : [];
+  const currentTitle = selectedPlaylist
+    ? selectedPlaylist.title
+    : selectedMyList
+      ? selectedMyList.name
+      : "";
+
+  if (isShowingVideos && (selectedPlaylist || selectedMyList)) {
+    const saveTarget = selectedPlaylist
+      ? {
           playlistId: `playlist_${selectedPlaylist.playlistId}`,
           playlistTitle: selectedPlaylist.title,
-          playlistType: "playlist",
+          playlistType: "playlist" as const,
           sourceId: selectedPlaylist.channelId,
           thumbnailUrl: selectedPlaylist.thumbnailUrl,
-        };
-      }
+        }
+      : selectedMyList
+        ? {
+            playlistId: `mylist_${selectedMyList.id}`,
+            playlistTitle: selectedMyList.name,
+            playlistType: "mylist" as const,
+            sourceId: selectedMyList.id,
+            thumbnailUrl: selectedMyList.thumbnailUrl,
+          }
+        : null;
 
-      if (selectedMyList) {
-        return {
-          playlistId: `mylist_${selectedMyList.id}`,
-          playlistTitle: selectedMyList.name,
-          playlistType: "mylist",
-          sourceId: selectedMyList.id,
-          thumbnailUrl: selectedMyList.thumbnailUrl,
-        };
-      }
-
-      return null;
-    })();
-
-    // Videos available on server (downloaded on desktop)
     const availableVideos = currentVideos.filter(
       (v) => v.downloadStatus === "completed"
     );
-    // Videos not yet synced to mobile
     const syncableCount = serverUrl
       ? availableVideos.filter((v) => !syncedVideoIds.has(v.id)).length
       : 0;
-    // Videos already saved locally
     const savedCount = availableVideos.filter((v) =>
       syncedVideoIds.has(v.id)
     ).length;
     const totalAvailable = availableVideos.length;
-    const isFullySaved = savedCount === totalAvailable && totalAvailable > 0;
     const isPlaylistSaveContext = Boolean(selectedPlaylist || selectedMyList);
     const isSaveActionDone =
       isPlaylistSaveContext && saveTarget
         ? isPlaylistSaved(saveTarget.playlistId)
-        : isFullySaved;
+        : savedCount === totalAvailable && totalAvailable > 0;
 
     const handleSavePlaylistOffline = () => {
-      if (!saveTarget) {
-        return;
-      }
-
+      if (!saveTarget) return;
       const videoInfos = currentVideos.map((v) => ({
         videoId: v.id,
         title: v.title,
@@ -501,7 +351,6 @@ export default function SyncScreen() {
         duration: v.duration,
         thumbnailUrl: v.thumbnailUrl ?? undefined,
       }));
-
       try {
         savePlaylist(
           saveTarget.playlistId,
@@ -511,18 +360,12 @@ export default function SyncScreen() {
           saveTarget.thumbnailUrl,
           videoInfos
         );
-        bumpSavedPlaylistVersion((value) => value + 1);
+        bumpSavedPlaylistVersion((v) => v + 1);
       } catch (error) {
-        console.log("[Sync] Failed to save playlist:", error);
         Alert.alert("Save failed", "Could not save playlist. Please try again.");
         return;
       }
-
-      if (!serverUrl) {
-        return;
-      }
-
-      // Queue downloads for videos not yet synced
+      if (!serverUrl) return;
       for (const video of availableVideos) {
         if (!syncedVideoIds.has(video.id)) {
           queueDownload(video.id, {
@@ -536,11 +379,10 @@ export default function SyncScreen() {
     };
 
     return (
-      <View style={styles.container}>
-        {/* Header with back button */}
+      <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.videoHeader}>
           <Pressable style={styles.backButton} onPress={handleBackPress}>
-            <Text style={styles.backIcon}>←</Text>
+            <ArrowLeft size={18} color={colors.foreground} />
           </Pressable>
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle} numberOfLines={1}>
@@ -552,8 +394,7 @@ export default function SyncScreen() {
                 : `${currentVideos.length} videos`}
             </Text>
           </View>
-          {/* Save Offline Button */}
-          {!isChannelDetail && currentVideos.length > 0 && serverUrl && (
+          {currentVideos.length > 0 && serverUrl && (
             <Pressable
               style={[
                 styles.saveOfflineButton,
@@ -563,17 +404,12 @@ export default function SyncScreen() {
               disabled={isSaveActionDone}
             >
               <Text style={styles.saveOfflineButtonText}>
-                {isSaveActionDone
-                  ? "Saved"
-                  : isPlaylistSaveContext
-                    ? "Save Playlist"
-                    : "Save All"}
+                {isSaveActionDone ? "Saved" : "Save Playlist"}
               </Text>
             </Pressable>
           )}
         </View>
 
-        {/* Progress bar */}
         {totalAvailable > 0 && (
           <View style={styles.progressContainer}>
             <View style={styles.progressBar}>
@@ -587,8 +423,7 @@ export default function SyncScreen() {
           </View>
         )}
 
-        {/* Selection toolbar */}
-        {!isChannelDetail && syncableCount > 0 && (
+        {syncableCount > 0 && (
           <View style={styles.toolbar}>
             <Pressable
               style={styles.toolbarButton}
@@ -613,10 +448,9 @@ export default function SyncScreen() {
           </View>
         )}
 
-        {/* Video list */}
         {isLoadingVideos ? (
           <View style={styles.centered}>
-            <ActivityIndicator size="large" color="#6366f1" />
+            <ActivityIndicator size="large" color={colors.primary} />
             <Text style={styles.loadingText}>Loading videos...</Text>
           </View>
         ) : videosError ? (
@@ -653,8 +487,8 @@ export default function SyncScreen() {
                 }
                 onSyncPress={
                   serverUrl &&
-                    item.downloadStatus === "completed" &&
-                    !syncedVideoIds.has(item.id)
+                  item.downloadStatus === "completed" &&
+                  !syncedVideoIds.has(item.id)
                     ? () => handleSyncVideo(item)
                     : undefined
                 }
@@ -663,50 +497,32 @@ export default function SyncScreen() {
             contentContainerStyle={styles.videoList}
           />
         )}
-      </View>
+      </SafeAreaView>
     );
   }
 
-  // Tab-based list view
   return (
-    <View style={styles.container}>
-      {!serverUrl && (
-        <View style={styles.offlineBanner}>
-          <Text style={styles.offlineBannerText}>
-            Offline mode: showing cached data
-          </Text>
-          <Pressable
-            style={styles.offlineBannerButton}
-            onPress={() => router.push("/(mobile)/(tabs)/settings")}
-          >
-            <Text style={styles.offlineBannerButtonText}>Reconnect</Text>
-          </Pressable>
-        </View>
-      )}
-      <SyncTabBar activeTab={activeTab} onTabChange={setActiveTab} />
+    <SafeAreaView style={styles.container} edges={["top"]}>
+      <View style={styles.tabBar}>
+        {LIBRARY_TABS.map((tab) => {
+          const isActive = libraryTab === tab.key;
+          return (
+            <Pressable
+              key={tab.key}
+              style={[styles.tab, isActive && styles.tabActive]}
+              onPress={() => setLibraryTab(tab.key)}
+            >
+              <Text
+                style={[styles.tabText, isActive && styles.tabTextActive]}
+              >
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
-      {activeTab === "channels" && (
-        <ChannelList
-          channels={channels}
-          isLoading={isLoadingChannels}
-          error={channelsError}
-          onChannelPress={handleChannelPress}
-          onRefresh={handleRefreshChannels}
-        />
-      )}
-
-      {activeTab === "playlists" && (
-        <PlaylistList
-          playlists={playlists}
-          isLoading={isLoadingPlaylists}
-          error={playlistsError}
-          serverUrl={serverUrl ?? undefined}
-          onPlaylistPress={handlePlaylistPress}
-          onRefresh={handleRefreshPlaylists}
-        />
-      )}
-
-      {activeTab === "mylists" && (
+      {libraryTab === "mylists" && (
         <MyListsList
           myLists={myLists}
           isLoading={isLoadingMyLists}
@@ -715,183 +531,183 @@ export default function SyncScreen() {
           onRefresh={handleRefreshMyLists}
         />
       )}
-    </View>
+
+      {libraryTab === "playlists" && (
+        <PlaylistList
+          playlists={playlists}
+          isLoading={isLoadingPlaylists}
+          error={playlistsError}
+          serverUrl={serverUrl ?? undefined}
+          favoritePlaylistIds={favoritePlaylistIds}
+          onPlaylistPress={handlePlaylistPress}
+          onSavePress={serverUrl ? handlePlaylistSavePress : undefined}
+          onRefresh={handleRefreshPlaylists}
+        />
+      )}
+
+      {libraryTab === "saved" && (
+        <View style={styles.savedContent}>
+          <SavedTabContent />
+        </View>
+      )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#09090b",
+    backgroundColor: colors.background,
   },
-  offlineBanner: {
+  tabBar: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    backgroundColor: colors.background,
     borderBottomWidth: 1,
-    borderBottomColor: "#27272a",
-    backgroundColor: "#111827",
+    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.xs,
   },
-  offlineBannerText: {
-    color: "#f3f4f6",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  offlineBannerButton: {
-    backgroundColor: "#6366f1",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  offlineBannerButtonText: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  centered: {
+  tab: {
     flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    padding: 32,
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
   },
-  loadingText: {
-    color: "#71717a",
-    fontSize: 14,
-    marginTop: 12,
+  tabActive: {
+    borderBottomColor: colors.primary,
   },
-  errorText: {
-    color: "#ef4444",
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 8,
+  tabText: {
+    color: colors.mutedForeground,
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.semibold,
   },
-  errorDetail: {
-    color: "#71717a",
-    fontSize: 13,
-    textAlign: "center",
+  tabTextActive: {
+    color: colors.foreground,
   },
-  emptyText: {
-    color: "#fafafa",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  connectButton: {
-    marginTop: 16,
-    backgroundColor: "#6366f1",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
-  connectButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+  savedContent: {
+    flex: 1,
   },
   videoHeader: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
-    backgroundColor: "#09090b",
+    padding: spacing.md,
+    backgroundColor: colors.card,
     borderBottomWidth: 1,
-    borderBottomColor: "#27272a",
+    borderBottomColor: colors.border,
   },
   backButton: {
     width: 36,
     height: 36,
-    borderRadius: 10,
-    backgroundColor: "#27272a",
+    borderRadius: 18,
+    backgroundColor: colors.muted,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
-  },
-  backIcon: {
-    color: "#fafafa",
-    fontSize: 18,
+    marginRight: spacing.sm + 4,
   },
   headerTitleContainer: {
     flex: 1,
   },
   headerTitle: {
-    color: "#fafafa",
-    fontSize: 18,
-    fontWeight: "600",
+    color: colors.foreground,
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.semibold,
   },
   headerSubtitle: {
-    color: "#71717a",
+    color: colors.mutedForeground,
     fontSize: 13,
     marginTop: 2,
   },
-  toolbar: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 12,
-    backgroundColor: "#09090b",
-    borderBottomWidth: 1,
-    borderBottomColor: "#27272a",
-  },
-  toolbarButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#27272a",
-  },
-  toolbarButtonText: {
-    color: "#fafafa",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  syncAllButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#6366f1",
-  },
-  syncAllButtonText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  gridList: {
-    padding: 16,
-    paddingBottom: 24,
-  },
-  gridRow: {
-    justifyContent: "space-between",
-  },
-  videoList: {
-    paddingVertical: 8,
-  },
   saveOfflineButton: {
+    backgroundColor: colors.primary,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: spacing.sm,
     borderRadius: 8,
-    backgroundColor: "#22c55e",
   },
   saveOfflineButtonDisabled: {
-    backgroundColor: "#27272a",
+    backgroundColor: colors.success,
   },
   saveOfflineButtonText: {
-    color: "#fff",
+    color: colors.primaryForeground,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: fontWeight.semibold,
   },
   progressContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: "#09090b",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.card,
   },
   progressBar: {
     height: 4,
-    backgroundColor: "#27272a",
+    backgroundColor: colors.muted,
     borderRadius: 2,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#22c55e",
+    backgroundColor: colors.success,
     borderRadius: 2,
+  },
+  toolbar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: spacing.sm + 4,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  toolbarButton: {
+    paddingHorizontal: spacing.sm + 4,
+    paddingVertical: spacing.sm,
+    borderRadius: 6,
+    backgroundColor: colors.muted,
+  },
+  toolbarButtonText: {
+    color: colors.foreground,
+    fontSize: 13,
+    fontWeight: fontWeight.medium,
+  },
+  syncAllButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+  },
+  syncAllButtonText: {
+    color: colors.primaryForeground,
+    fontSize: 13,
+    fontWeight: fontWeight.semibold,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xl,
+  },
+  loadingText: {
+    color: colors.mutedForeground,
+    fontSize: fontSize.base,
+    marginTop: spacing.sm + 4,
+  },
+  errorText: {
+    color: colors.destructive,
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.semibold,
+    marginBottom: spacing.sm,
+  },
+  errorDetail: {
+    color: colors.mutedForeground,
+    fontSize: 13,
+    textAlign: "center",
+  },
+  emptyText: {
+    color: colors.foreground,
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.semibold,
+  },
+  videoList: {
+    paddingVertical: spacing.sm,
   },
 });

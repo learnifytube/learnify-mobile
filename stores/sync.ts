@@ -410,13 +410,11 @@ export const useSyncStore = create<SyncStore>()(
           activeTab,
           channelVideos,
           playlistVideos,
-          subscriptionVideos,
           myListVideos,
         } = get();
         let videos: RemoteVideoWithStatus[] = [];
         if (activeTab === "channels") videos = channelVideos;
         else if (activeTab === "playlists") videos = playlistVideos;
-        else if (activeTab === "subscriptions") videos = subscriptionVideos;
         else if (activeTab === "mylists") videos = myListVideos;
         const downloadableVideos = videos.filter((v) => v.downloadStatus === "completed");
         set({ selectedVideoIds: new Set(downloadableVideos.map((v) => v.id)) });

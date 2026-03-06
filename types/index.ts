@@ -141,7 +141,7 @@ export interface RemoteMyList {
 }
 
 // Browse tabs for the home screen
-export type BrowseTab = "mylists" | "channels" | "playlists" | "subscriptions";
+export type BrowseTab = "mylists" | "channels" | "playlists";
 
 // Flashcard sync types
 export interface RemoteFlashcard {

@@ -19,21 +19,11 @@ import { useConnectionStore } from "../../../stores/connection";
 import { useSyncStore } from "../../../stores/sync";
 import { usePlaybackStore } from "../../../stores/playback";
 import { savePlaylist, isPlaylistSaved } from "../../../db/repositories/playlists";
-import {
-  SyncTabBar,
-  ChannelList,
-  PlaylistList,
-  MyListsList,
-} from "../../../components/sync";
+import { ChannelList } from "../../../components/sync";
 import { VideoGridCard } from "../../../components/VideoGridCard";
 import { colors, radius, spacing, fontSize, fontWeight } from "../../../theme";
 import { Smartphone, ArrowLeft, Play } from "../../../theme/icons";
-import type {
-  RemoteChannel,
-  RemotePlaylist,
-  RemoteVideoWithStatus,
-  RemoteMyList,
-} from "../../../types";
+import type { RemoteChannel, RemoteVideoWithStatus } from "../../../types";
 import type { StreamingVideo } from "../../../stores/playback";
 import { api } from "../../../services/api";
 import { getVideoLocalPath, videoExistsLocally } from "../../../services/downloader";
@@ -46,45 +36,20 @@ export default function HomeScreen() {
   const queueDownload = useDownloadStore((s) => s.queueDownload);
 
   const {
-    activeTab,
-    setActiveTab,
     channels,
-    playlists,
-    myLists,
     isLoadingChannels,
-    isLoadingPlaylists,
     isLoadingVideos,
-    isLoadingSubscriptions,
-    isLoadingMyLists,
     channelsError,
-    playlistsError,
-    subscriptionsError,
-    myListsError,
     videosError,
     selectedChannel,
     channelVideos,
-    selectedPlaylist,
-    playlistVideos,
-    subscriptionVideos,
-    selectedMyList,
-    myListVideos,
     selectedVideoIds,
-    favoritePlaylistIds,
     fetchChannels,
-    fetchPlaylists,
-    fetchSubscriptions,
-    fetchMyLists,
     fetchChannelVideos,
-    fetchPlaylistVideos,
-    fetchMyListVideos,
     selectChannel,
-    selectPlaylist,
-    selectMyList,
     toggleVideoSelection,
     selectAllVideos,
     clearVideoSelection,
-    addToFavorites,
-    removeFromFavorites,
   } = useSyncStore();
 
   const startPlaylist = usePlaybackStore((s) => s.startPlaylist);
@@ -107,31 +72,13 @@ export default function HomeScreen() {
     });
   }, []);
 
-  // Fetch data when tab changes or on connect
+  // Fetch channels when connected
   useEffect(() => {
     if (!serverUrl) return;
-
-    if (activeTab === "channels" && channels.length === 0) {
+    if (channels.length === 0) {
       fetchChannels(serverUrl);
-    } else if (activeTab === "playlists" && playlists.length === 0) {
-      fetchPlaylists(serverUrl);
-    } else if (activeTab === "subscriptions" && subscriptionVideos.length === 0) {
-      fetchSubscriptions(serverUrl);
-    } else if (activeTab === "mylists" && myLists.length === 0) {
-      fetchMyLists(serverUrl);
     }
-  }, [
-    activeTab,
-    serverUrl,
-    channels.length,
-    playlists.length,
-    subscriptionVideos.length,
-    myLists.length,
-    fetchChannels,
-    fetchPlaylists,
-    fetchSubscriptions,
-    fetchMyLists,
-  ]);
+  }, [serverUrl, channels.length, fetchChannels]);
 
   // Clear pending actions when disconnected
   useEffect(() => {
@@ -141,11 +88,7 @@ export default function HomeScreen() {
     }
   }, [serverUrl, clearVideoSelection]);
 
-  const hasCachedData =
-    channels.length > 0 ||
-    playlists.length > 0 ||
-    myLists.length > 0 ||
-    subscriptionVideos.length > 0;
+  const hasCachedData = channels.length > 0;
 
   const showOfflineAlert = useCallback(() => {
     Alert.alert(
@@ -162,30 +105,6 @@ export default function HomeScreen() {
     showOfflineAlert();
   }, [serverUrl, fetchChannels, showOfflineAlert]);
 
-  const handleRefreshPlaylists = useCallback(() => {
-    if (serverUrl) {
-      fetchPlaylists(serverUrl);
-      return;
-    }
-    showOfflineAlert();
-  }, [serverUrl, fetchPlaylists, showOfflineAlert]);
-
-  const handleRefreshSubscriptions = useCallback(() => {
-    if (serverUrl) {
-      fetchSubscriptions(serverUrl);
-      return;
-    }
-    showOfflineAlert();
-  }, [serverUrl, fetchSubscriptions, showOfflineAlert]);
-
-  const handleRefreshMyLists = useCallback(() => {
-    if (serverUrl) {
-      fetchMyLists(serverUrl);
-      return;
-    }
-    showOfflineAlert();
-  }, [serverUrl, fetchMyLists, showOfflineAlert]);
-
   const handleChannelPress = useCallback(
     (channel: RemoteChannel) => {
       if (serverUrl) {
@@ -197,44 +116,11 @@ export default function HomeScreen() {
     [serverUrl, fetchChannelVideos, selectChannel]
   );
 
-  const handlePlaylistPress = useCallback(
-    (playlist: RemotePlaylist) => {
-      if (serverUrl) {
-        fetchPlaylistVideos(serverUrl, playlist);
-        return;
-      }
-      selectPlaylist(playlist);
-    },
-    [serverUrl, fetchPlaylistVideos, selectPlaylist]
-  );
-
-  const handleMyListPress = useCallback(
-    (myList: RemoteMyList) => {
-      if (serverUrl) {
-        fetchMyListVideos(serverUrl, myList);
-        return;
-      }
-      selectMyList(myList);
-    },
-    [serverUrl, fetchMyListVideos, selectMyList]
-  );
-
   const handleBackPress = useCallback(() => {
     if (selectedChannel) {
       selectChannel(null);
-    } else if (selectedPlaylist) {
-      selectPlaylist(null);
-    } else if (selectedMyList) {
-      selectMyList(null);
     }
-  }, [
-    selectedChannel,
-    selectedPlaylist,
-    selectedMyList,
-    selectChannel,
-    selectPlaylist,
-    selectMyList,
-  ]);
+  }, [selectedChannel, selectChannel]);
 
   const sleep = useCallback(
     (ms: number) =>
@@ -281,93 +167,6 @@ export default function HomeScreen() {
     [sleep]
   );
 
-  const playSubscriptionVideo = useCallback(
-    (video: RemoteVideoWithStatus) => {
-      const localPath =
-        getVideoLocalPath(video.id) ??
-        libraryVideos.find((v) => v.id === video.id)?.localPath;
-      if (!serverUrl && !localPath) {
-        Alert.alert(
-          "Offline mode",
-          "This video is not downloaded on mobile yet."
-        );
-        return;
-      }
-
-      const streamingVideo: StreamingVideo = {
-        id: video.id,
-        title: video.title,
-        channelTitle: video.channelTitle,
-        duration: video.duration,
-        thumbnailUrl: video.thumbnailUrl ?? undefined,
-        localPath: localPath ?? undefined,
-      };
-
-      startPlaylist(
-        "subscriptions",
-        "Subscriptions",
-        [streamingVideo],
-        0,
-        serverUrl ?? undefined
-      );
-      router.push(`/player/${video.id}`);
-    },
-    [libraryVideos, serverUrl, startPlaylist, router]
-  );
-
-  const handleSubscriptionVideoPress = useCallback(
-    async (video: RemoteVideoWithStatus) => {
-      if (videoExistsLocally(video.id)) {
-        playSubscriptionVideo(video);
-        return;
-      }
-      if (!serverUrl) {
-        Alert.alert(
-          "Offline mode",
-          "Reconnect to desktop to stream or sync this video."
-        );
-        return;
-      }
-      if (pendingVideoIds.has(video.id)) return;
-
-      setPending(video.id, true);
-      try {
-        const response = await api.requestServerDownload(serverUrl, { videoId: video.id });
-        if (!response.success && !response.status) {
-          throw new Error(response.message || "Server refused download request");
-        }
-        await waitForServerDownload(video.id);
-
-        if (!videoExistsLocally(video.id)) {
-          queueDownload(video.id, {
-            title: video.title,
-            channelTitle: video.channelTitle,
-            duration: video.duration,
-            thumbnailUrl: video.thumbnailUrl ?? undefined,
-          });
-          await waitForLocalVideo(video.id);
-        }
-
-        playSubscriptionVideo(video);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to prepare video";
-        Alert.alert("Unable to play video", message);
-      } finally {
-        setPending(video.id, false);
-      }
-    },
-    [
-      serverUrl,
-      pendingVideoIds,
-      setPending,
-      queueDownload,
-      waitForServerDownload,
-      waitForLocalVideo,
-      playSubscriptionVideo,
-    ]
-  );
-
   // Play a single video (streaming or local)
   const handlePlayVideo = useCallback(
     (video: RemoteVideoWithStatus) => {
@@ -392,29 +191,16 @@ export default function HomeScreen() {
         localPath: localPath ?? undefined,
       };
 
-      // Determine the context title
+      // Determine the context title (channels-only screen)
       let contextTitle = "Now Playing";
       let contextId = `single-${video.id}`;
       if (selectedChannel) {
         contextTitle = selectedChannel.channelTitle;
         contextId = `channel-${selectedChannel.channelId}`;
-      } else if (selectedPlaylist) {
-        contextTitle = selectedPlaylist.title;
-        contextId = `playlist-${selectedPlaylist.playlistId}`;
-      } else if (selectedMyList) {
-        contextTitle = selectedMyList.name;
-        contextId = `mylist-${selectedMyList.id}`;
-      } else if (activeTab === "subscriptions") {
-        contextTitle = "Subscriptions";
-        contextId = "subscriptions";
       }
 
       // Get the current video list for playlist context
-      let currentVideos: RemoteVideoWithStatus[] = [];
-      if (selectedChannel) currentVideos = channelVideos;
-      else if (selectedPlaylist) currentVideos = playlistVideos;
-      else if (selectedMyList) currentVideos = myListVideos;
-      else if (activeTab === "subscriptions") currentVideos = subscriptionVideos;
+      const currentVideos = selectedChannel ? channelVideos : [];
 
       // Convert to StreamingVideo array
       const playlistStreamingVideos: StreamingVideo[] = currentVideos.map(
@@ -463,65 +249,14 @@ export default function HomeScreen() {
 
       router.push(`/player/${video.id}`);
     },
-    [
-      serverUrl,
-      libraryVideos,
-      selectedChannel,
-      selectedPlaylist,
-      selectedMyList,
-      activeTab,
-      channelVideos,
-      playlistVideos,
-      subscriptionVideos,
-      myListVideos,
-      startPlaylist,
-      router,
-    ]
-  );
-
-  const handlePlaylistSavePress = useCallback(
-    async (playlist: RemotePlaylist) => {
-      if (!serverUrl) return;
-      const entityType =
-        playlist.type === "custom" ? "custom_playlist" : "channel_playlist";
-      const isFavorited = favoritePlaylistIds.has(playlist.playlistId);
-
-      try {
-        if (isFavorited) {
-          await removeFromFavorites(serverUrl, entityType, playlist.playlistId);
-        } else {
-          await addToFavorites(serverUrl, entityType, playlist.playlistId);
-        }
-      } catch (error) {
-        console.error("[HomeScreen] Failed to toggle favorite:", error);
-      }
-    },
-    [serverUrl, favoritePlaylistIds, addToFavorites, removeFromFavorites]
+    [serverUrl, libraryVideos, selectedChannel, channelVideos, startPlaylist, router]
   );
 
   const handlePlayAll = useCallback(() => {
-    // Determine current context and videos
-    let contextTitle = "";
-    let contextId = "";
-    let currentVideos: RemoteVideoWithStatus[] = [];
-
-    if (selectedPlaylist) {
-      contextTitle = selectedPlaylist.title;
-      contextId = `playlist-${selectedPlaylist.playlistId}`;
-      currentVideos = playlistVideos;
-    } else if (selectedChannel) {
-      contextTitle = selectedChannel.channelTitle;
-      contextId = `channel-${selectedChannel.channelId}`;
-      currentVideos = channelVideos;
-    } else if (selectedMyList) {
-      contextTitle = selectedMyList.name;
-      contextId = `mylist-${selectedMyList.id}`;
-      currentVideos = myListVideos;
-    } else if (activeTab === "subscriptions") {
-      contextTitle = "Subscriptions";
-      contextId = "subscriptions";
-      currentVideos = subscriptionVideos;
-    }
+    if (!selectedChannel) return;
+    const contextTitle = selectedChannel.channelTitle;
+    const contextId = `channel-${selectedChannel.channelId}`;
+    const currentVideos = channelVideos;
 
     const playableVideos = currentVideos.filter((v) => {
       if (serverUrl) {
@@ -575,14 +310,8 @@ export default function HomeScreen() {
   }, [
     serverUrl,
     syncedVideoIds,
-    selectedPlaylist,
     selectedChannel,
-    selectedMyList,
-    activeTab,
-    playlistVideos,
     channelVideos,
-    subscriptionVideos,
-    myListVideos,
     libraryVideos,
     startPlaylist,
   ]);
@@ -602,12 +331,7 @@ export default function HomeScreen() {
   );
 
   const handleSyncSelected = useCallback(() => {
-    let videos: RemoteVideoWithStatus[] = [];
-    if (activeTab === "channels") videos = channelVideos;
-    else if (activeTab === "playlists") videos = playlistVideos;
-    else if (activeTab === "subscriptions") videos = subscriptionVideos;
-    else if (activeTab === "mylists") videos = myListVideos;
-
+    const videos = channelVideos;
     for (const video of videos) {
       if (
         selectedVideoIds.has(video.id) &&
@@ -624,11 +348,7 @@ export default function HomeScreen() {
     }
     clearVideoSelection();
   }, [
-    activeTab,
     channelVideos,
-    playlistVideos,
-    subscriptionVideos,
-    myListVideos,
     selectedVideoIds,
     syncedVideoIds,
     queueDownload,
@@ -655,60 +375,20 @@ export default function HomeScreen() {
     );
   }
 
-  // Video list view for selected channel/playlist/subscription/mylist
-  const isShowingVideos = selectedChannel || selectedPlaylist || selectedMyList;
+  // Video list view for selected channel
+  const isShowingVideos = Boolean(selectedChannel);
+  const currentVideos = selectedChannel ? channelVideos : [];
+  const currentTitle = selectedChannel ? selectedChannel.channelTitle : "";
 
-  const getCurrentVideos = () => {
-    if (selectedChannel) return channelVideos;
-    if (selectedPlaylist) return playlistVideos;
-    if (selectedMyList) return myListVideos;
-    return [];
-  };
-  const currentVideos = getCurrentVideos();
-
-  const getCurrentTitle = () => {
-    if (selectedChannel) return selectedChannel.channelTitle;
-    if (selectedPlaylist) return selectedPlaylist.title;
-    if (selectedMyList) return selectedMyList.name;
-    return "";
-  };
-  const currentTitle = getCurrentTitle();
-
-  if (isShowingVideos) {
-    const isChannelDetail = Boolean(selectedChannel);
-    const saveTarget = (() => {
-      if (selectedChannel) {
-        return {
-          playlistId: `channel_${selectedChannel.channelId}`,
-          playlistTitle: selectedChannel.channelTitle,
-          playlistType: "channel",
-          sourceId: selectedChannel.channelId,
-          thumbnailUrl: selectedChannel.thumbnailUrl,
-        };
-      }
-
-      if (selectedPlaylist) {
-        return {
-          playlistId: `playlist_${selectedPlaylist.playlistId}`,
-          playlistTitle: selectedPlaylist.title,
-          playlistType: "playlist",
-          sourceId: selectedPlaylist.channelId,
-          thumbnailUrl: selectedPlaylist.thumbnailUrl,
-        };
-      }
-
-      if (selectedMyList) {
-        return {
-          playlistId: `mylist_${selectedMyList.id}`,
-          playlistTitle: selectedMyList.name,
-          playlistType: "mylist",
-          sourceId: selectedMyList.id,
-          thumbnailUrl: selectedMyList.thumbnailUrl,
-        };
-      }
-
-      return null;
-    })();
+  if (isShowingVideos && selectedChannel) {
+    const isChannelDetail = true;
+    const saveTarget = {
+      playlistId: `channel_${selectedChannel.channelId}`,
+      playlistTitle: selectedChannel.channelTitle,
+      playlistType: "channel" as const,
+      sourceId: selectedChannel.channelId,
+      thumbnailUrl: selectedChannel.thumbnailUrl,
+    };
 
     // Videos available on server (downloaded on desktop)
     const availableVideos = currentVideos.filter(
@@ -722,7 +402,7 @@ export default function HomeScreen() {
     ).length;
     const totalAvailable = availableVideos.length;
     const isFullySaved = savedCount === totalAvailable && totalAvailable > 0;
-    const isPlaylistSaveContext = Boolean(selectedPlaylist || selectedMyList);
+    const isPlaylistSaveContext = false;
     const isSaveActionDone =
       isPlaylistSaveContext && saveTarget
         ? isPlaylistSaved(saveTarget.playlistId)
@@ -907,7 +587,7 @@ export default function HomeScreen() {
                     ? { type: "preparing" }
                     : { type: "none" }
                 }
-                onPress={() => handleSubscriptionVideoPress(item)}
+                onPress={() => handlePlayVideo(item)}
               />
             )}
           />
@@ -916,87 +596,16 @@ export default function HomeScreen() {
     );
   }
 
-  // Main browsing view with tabs
+  // Channels list (no tabs)
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Tab bar */}
-      <SyncTabBar activeTab={activeTab} onTabChange={setActiveTab} />
-
-      {/* Tab content */}
-      {activeTab === "channels" && (
-        <ChannelList
-          channels={channels}
-          isLoading={isLoadingChannels}
-          error={channelsError}
-          onChannelPress={handleChannelPress}
-          onRefresh={handleRefreshChannels}
-        />
-      )}
-
-      {activeTab === "playlists" && (
-        <PlaylistList
-          playlists={playlists}
-          isLoading={isLoadingPlaylists}
-          error={playlistsError}
-          serverUrl={serverUrl ?? undefined}
-          favoritePlaylistIds={favoritePlaylistIds}
-          onPlaylistPress={handlePlaylistPress}
-          onSavePress={serverUrl ? handlePlaylistSavePress : undefined}
-          onRefresh={handleRefreshPlaylists}
-        />
-      )}
-
-      {activeTab === "subscriptions" && (
-        <View style={{ flex: 1 }}>
-          {isLoadingSubscriptions && subscriptionVideos.length === 0 ? (
-            <View style={styles.centered}>
-              <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.loadingText}>Loading subscriptions...</Text>
-            </View>
-          ) : subscriptionsError ? (
-            <View style={styles.centered}>
-              <Text style={styles.errorText}>Failed to load subscriptions</Text>
-              <Text style={styles.errorDetail}>{subscriptionsError}</Text>
-            </View>
-          ) : subscriptionVideos.length === 0 ? (
-            <View style={styles.centered}>
-              <Text style={styles.emptyListText}>No subscription videos yet</Text>
-            </View>
-          ) : (
-            <FlatList
-              style={{ flex: 1 }}
-              data={subscriptionVideos}
-              keyExtractor={(item) => item.id}
-              numColumns={2}
-              columnWrapperStyle={styles.gridRow}
-              contentContainerStyle={styles.gridList}
-              renderItem={({ item, index }) => (
-                <VideoGridCard
-                  video={item}
-                  pending={
-                    pendingVideoIds.has(item.id)
-                      ? { type: "preparing" }
-                      : { type: "none" }
-                  }
-                  onPress={() => handleSubscriptionVideoPress(item)}
-                />
-              )}
-              refreshing={isLoadingSubscriptions}
-              onRefresh={handleRefreshSubscriptions}
-            />
-          )}
-        </View>
-      )}
-
-      {activeTab === "mylists" && (
-        <MyListsList
-          myLists={myLists}
-          isLoading={isLoadingMyLists}
-          error={myListsError}
-          onMyListPress={handleMyListPress}
-          onRefresh={handleRefreshMyLists}
-        />
-      )}
+      <ChannelList
+        channels={channels}
+        isLoading={isLoadingChannels}
+        error={channelsError}
+        onChannelPress={handleChannelPress}
+        onRefresh={handleRefreshChannels}
+      />
     </SafeAreaView>
   );
 }

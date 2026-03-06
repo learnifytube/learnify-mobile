@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   PermissionsAndroid,
   Platform,
   StyleSheet,
@@ -42,7 +43,9 @@ const ANDROID_NEARBY_WIFI_DEVICES_PERMISSION =
   "android.permission.NEARBY_WIFI_DEVICES";
 const MAX_AUTO_CONNECT_ATTEMPTS = 30;
 const AUTO_CONNECT_RETRY_MS = 3000;
-const PAGE_SIZE = 12;
+const GRID_COLUMNS = 4;
+const GRID_ROWS = 2;
+const PAGE_SIZE = GRID_COLUMNS * GRID_ROWS;
 
 type TVBrowseMode = "playlists" | "mylists" | "channels" | "history";
 type ConnectionStage = "connecting" | "connected" | "offline";
@@ -51,15 +54,9 @@ type BaseGridCard = {
   id: string;
   title: string;
   subtitle: string;
+  thumbnailUrl?: string | null;
   type: "playlist" | "mylist" | "channel" | "history";
 };
-
-type LoadMoreCard = {
-  id: "load-more";
-  type: "load-more";
-};
-
-type GridCard = BaseGridCard | LoadMoreCard;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -143,7 +140,8 @@ async function ensureDiscoveryPermissions(): Promise<boolean> {
 
 function toStreamingVideos(
   input: RemoteVideoWithStatus[],
-  localPathByVideoId: Map<string, string>
+  localPathByVideoId: Map<string, string>,
+  serverUrl: string | null
 ) {
   return input.map<StreamingVideo>((item) => {
     const localPath = getVideoLocalPath(item.id) ?? localPathByVideoId.get(item.id);
@@ -152,10 +150,32 @@ function toStreamingVideos(
       title: item.title,
       channelTitle: item.channelTitle,
       duration: item.duration,
-      thumbnailUrl: item.thumbnailUrl ?? undefined,
+      thumbnailUrl: resolveThumbnailUrl(serverUrl, item.thumbnailUrl) ?? undefined,
       localPath,
     };
   });
+}
+
+function resolveThumbnailUrl(
+  serverUrl: string | null,
+  thumbnailUrl?: string | null
+): string | null {
+  const trimmed = thumbnailUrl?.trim();
+  if (!trimmed) return null;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("//")) {
+    return `https:${trimmed}`;
+  }
+  if (!serverUrl) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/")) {
+    return `${serverUrl}${trimmed}`;
+  }
+  return `${serverUrl}/${trimmed}`;
 }
 
 export default function TVHomeScreen() {
@@ -183,12 +203,14 @@ export default function TVHomeScreen() {
   const [channels, setChannels] = useState<RemoteChannel[]>([]);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
 
-  const [visibleCounts, setVisibleCounts] = useState<Record<TVBrowseMode, number>>({
-    playlists: PAGE_SIZE,
-    mylists: PAGE_SIZE,
-    channels: PAGE_SIZE,
-    history: PAGE_SIZE,
+  const [pageOffsets, setPageOffsets] = useState<Record<TVBrowseMode, number>>({
+    playlists: 0,
+    mylists: 0,
+    channels: 0,
+    history: 0,
   });
+  const [focusedGridIndex, setFocusedGridIndex] = useState(0);
+  const [isGridFocused, setIsGridFocused] = useState(false);
 
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const discoveredPeersRef = useRef<DiscoveredPeer[]>([]);
@@ -410,7 +432,7 @@ export default function TVHomeScreen() {
           ? await api.getPlaylistVideos(serverUrl, id)
           : await api.getMyListVideos(serverUrl, id);
 
-      const streamingVideos = toStreamingVideos(response.videos, localPathByVideoId);
+      const streamingVideos = toStreamingVideos(response.videos, localPathByVideoId, serverUrl);
       if (streamingVideos.length === 0) {
         return;
       }
@@ -435,9 +457,12 @@ export default function TVHomeScreen() {
         id: item.playlistId,
         title: item.title,
         subtitle: `${item.downloadedCount} ready`,
+        thumbnailUrl:
+          resolveThumbnailUrl(serverUrl, item.thumbnailUrl) ??
+          (serverUrl ? api.getPlaylistThumbnailUrl(serverUrl, item.playlistId) : null),
         type: "playlist",
       })),
-    [playlists]
+    [playlists, serverUrl]
   );
 
   const myListCards = useMemo<BaseGridCard[]>(
@@ -446,9 +471,10 @@ export default function TVHomeScreen() {
         id: item.id,
         title: item.name,
         subtitle: `${item.itemCount} videos`,
+        thumbnailUrl: resolveThumbnailUrl(serverUrl, item.thumbnailUrl),
         type: "mylist",
       })),
-    [myLists]
+    [myLists, serverUrl]
   );
 
   const channelCards = useMemo<BaseGridCard[]>(
@@ -457,9 +483,10 @@ export default function TVHomeScreen() {
         id: item.channelId,
         title: item.channelTitle,
         subtitle: `${item.videoCount} videos`,
+        thumbnailUrl: resolveThumbnailUrl(serverUrl, item.thumbnailUrl),
         type: "channel",
       })),
-    [channels]
+    [channels, serverUrl]
   );
 
   const historyCards = useMemo<BaseGridCard[]>(
@@ -468,6 +495,7 @@ export default function TVHomeScreen() {
         const total = item.videos.length;
         const currentPosition = total > 0 ? Math.min(item.lastIndex + 1, total) : 0;
         const currentVideo = item.videos[item.lastIndex];
+        const historyServerUrl = item.serverUrl ?? serverUrl ?? null;
         const subtitle = currentVideo
           ? `Resume ${currentPosition}/${total} - ${currentVideo.title}`
           : `Resume ${currentPosition}/${total}`;
@@ -476,10 +504,13 @@ export default function TVHomeScreen() {
           id: item.playlistId,
           title: item.title,
           subtitle,
+          thumbnailUrl:
+            resolveThumbnailUrl(historyServerUrl, currentVideo?.thumbnailUrl) ??
+            resolveThumbnailUrl(historyServerUrl, item.videos[0]?.thumbnailUrl),
           type: "history",
         };
       }),
-    [recentPlaylists]
+    [recentPlaylists, serverUrl]
   );
 
   const activeCards = useMemo(() => {
@@ -489,21 +520,75 @@ export default function TVHomeScreen() {
     return channelCards;
   }, [channelCards, historyCards, mode, myListCards, playlistCards]);
 
-  const visibleCount = visibleCounts[mode];
-  const hasMore = activeCards.length > visibleCount;
+  const currentOffset = pageOffsets[mode];
+  const maxOffset = Math.max(0, activeCards.length - PAGE_SIZE);
+  const pageOffset = Math.min(currentOffset, maxOffset);
 
-  const gridItems = useMemo<GridCard[]>(() => {
-    const visible = activeCards.slice(0, visibleCount);
-    if (!hasMore) return visible;
-    return [...visible, { id: "load-more", type: "load-more" }];
-  }, [activeCards, hasMore, visibleCount]);
+  const pageItems = useMemo(
+    () => activeCards.slice(pageOffset, pageOffset + PAGE_SIZE),
+    [activeCards, pageOffset]
+  );
 
-  const loadMoreForMode = useCallback((target: TVBrowseMode) => {
-    setVisibleCounts((prev) => ({
-      ...prev,
-      [target]: prev[target] + PAGE_SIZE,
-    }));
-  }, []);
+  useEffect(() => {
+    if (currentOffset !== pageOffset) {
+      setPageOffsets((prev) => ({
+        ...prev,
+        [mode]: pageOffset,
+      }));
+    }
+  }, [currentOffset, mode, pageOffset]);
+
+  useEffect(() => {
+    if (pageItems.length === 0) {
+      if (focusedGridIndex !== 0) {
+        setFocusedGridIndex(0);
+      }
+      return;
+    }
+
+    if (focusedGridIndex > pageItems.length - 1) {
+      setFocusedGridIndex(pageItems.length - 1);
+    }
+  }, [focusedGridIndex, pageItems.length]);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      "onHWKeyEvent",
+      (event: { eventType?: string; eventKeyAction?: number }) => {
+        if (!isGridFocused) return;
+        if (!pageItems.length) return;
+        if (typeof event.eventKeyAction === "number" && event.eventKeyAction !== 0) {
+          return;
+        }
+
+        if (event.eventType === "right" && focusedGridIndex === pageItems.length - 1) {
+          const nextOffset = Math.min(pageOffset + PAGE_SIZE, maxOffset);
+          if (nextOffset !== pageOffset) {
+            setPageOffsets((prev) => ({
+              ...prev,
+              [mode]: nextOffset,
+            }));
+            setFocusedGridIndex(0);
+          }
+        }
+
+        if (event.eventType === "left" && focusedGridIndex === 0 && pageOffset > 0) {
+          const nextOffset = Math.max(0, pageOffset - PAGE_SIZE);
+          if (nextOffset !== pageOffset) {
+            setPageOffsets((prev) => ({
+              ...prev,
+              [mode]: nextOffset,
+            }));
+            setFocusedGridIndex(PAGE_SIZE - 1);
+          }
+        }
+      }
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [focusedGridIndex, isGridFocused, maxOffset, mode, pageItems.length, pageOffset]);
 
   const handleCardPress = useCallback(
     (card: BaseGridCard) => {
@@ -558,6 +643,7 @@ export default function TVHomeScreen() {
           <TVFocusPressable
             style={[styles.modeTab, mode === "playlists" && styles.modeTabActive]}
             onPress={() => setMode("playlists")}
+            onFocus={() => setIsGridFocused(false)}
             hasTVPreferredFocus
           >
             <Text style={styles.modeTabText}>Playlists</Text>
@@ -565,18 +651,21 @@ export default function TVHomeScreen() {
           <TVFocusPressable
             style={[styles.modeTab, mode === "mylists" && styles.modeTabActive]}
             onPress={() => setMode("mylists")}
+            onFocus={() => setIsGridFocused(false)}
           >
             <Text style={styles.modeTabText}>My Lists</Text>
           </TVFocusPressable>
           <TVFocusPressable
             style={[styles.modeTab, mode === "channels" && styles.modeTabActive]}
             onPress={() => setMode("channels")}
+            onFocus={() => setIsGridFocused(false)}
           >
             <Text style={styles.modeTabText}>Channels</Text>
           </TVFocusPressable>
           <TVFocusPressable
             style={[styles.modeTab, mode === "history" && styles.modeTabActive]}
             onPress={() => setMode("history")}
+            onFocus={() => setIsGridFocused(false)}
           >
             <Text style={styles.modeTabText}>History</Text>
           </TVFocusPressable>
@@ -590,6 +679,7 @@ export default function TVHomeScreen() {
               connectionStage === "connecting" && styles.iconButtonConnecting,
             ]}
             onPress={() => startAutoConnect(true)}
+            onFocus={() => setIsGridFocused(false)}
             disabled={connectionStage === "connecting"}
           >
             {connectionStage === "connecting" ? (
@@ -603,6 +693,7 @@ export default function TVHomeScreen() {
           <TVFocusPressable
             style={styles.iconButton}
             onPress={() => router.push("/(tv)/settings" as Href)}
+            onFocus={() => setIsGridFocused(false)}
           >
             <Settings size={24} color="#fffef2" />
           </TVFocusPressable>
@@ -626,31 +717,26 @@ export default function TVHomeScreen() {
         </View>
       ) : (
         <FlatList
-          data={gridItems}
-          keyExtractor={(item, index) =>
-            item.type === "load-more" ? `${mode}-load-more-${index}` : `${item.type}-${item.id}`
-          }
-          numColumns={3}
+          data={pageItems}
+          key={`${mode}-${pageOffset}`}
+          keyExtractor={(item) => `${item.type}-${item.id}`}
+          numColumns={GRID_COLUMNS}
+          scrollEnabled={false}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
           renderItem={({ item, index }) => {
-            if (item.type === "load-more") {
-              return (
-                <TVFocusPressable
-                  style={[styles.card, styles.loadMoreCard]}
-                  onFocus={() => loadMoreForMode(mode)}
-                  onPress={() => loadMoreForMode(mode)}
-                >
-                  <Text style={styles.loadMoreText}>Load More</Text>
-                </TVFocusPressable>
-              );
-            }
-
             return (
               <TVCard
                 title={item.title}
                 subtitle={item.subtitle}
-                hasTVPreferredFocus={connectionStage === "connected" && index === 0}
+                thumbnailUrl={item.thumbnailUrl}
+                hasTVPreferredFocus={
+                  connectionStage === "connected" && index === focusedGridIndex
+                }
+                onFocus={() => {
+                  setIsGridFocused(true);
+                  setFocusedGridIndex(index);
+                }}
                 onPress={() => handleCardPress(item)}
                 style={styles.card}
               />
@@ -755,18 +841,5 @@ const styles = StyleSheet.create({
   card: {
     width: TV_GRID_CARD_WIDTH,
     height: TV_GRID_CARD_HEIGHT,
-  },
-  loadMoreCard: {
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: "#ffd93d",
-    backgroundColor: "#ff8a00",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadMoreText: {
-    color: "#fffef2",
-    fontSize: 24,
-    fontWeight: "900",
   },
 });
