@@ -17,6 +17,7 @@ import { usePlaybackStore, type StreamingVideo } from "../../stores/playback";
 import { useTVHistoryStore } from "../../stores/tvHistory";
 import { api } from "../../services/api";
 import { startScanning, stopScanning } from "../../services/p2p/discovery";
+import { getAndroidEmulatorHostConnectUrls } from "../../services/android-emulator";
 import {
   assertSyncCompatibility,
   SyncCompatibilityError,
@@ -214,6 +215,10 @@ export default function TVHomeScreen() {
 
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const discoveredPeersRef = useRef<DiscoveredPeer[]>([]);
+  const emulatorHostConnectUrls = useMemo(
+    () => getAndroidEmulatorHostConnectUrls([DEFAULT_SYNC_PORT, LEGACY_SYNC_PORT]),
+    []
+  );
 
   const autoConnectRunIdRef = useRef(0);
   const autoConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -295,6 +300,8 @@ export default function TVHomeScreen() {
       let connected = false;
       if (targetPeer) {
         connected = await connectToPeer(targetPeer);
+      } else if (emulatorHostConnectUrls.length > 0) {
+        connected = await connectWithCandidates(emulatorHostConnectUrls, "Desktop Host");
       }
 
       if (autoConnectRunIdRef.current !== runId) return;
@@ -308,7 +315,7 @@ export default function TVHomeScreen() {
         void runAutoConnectAttempt(runId, attemptIndex + 1);
       }, AUTO_CONNECT_RETRY_MS);
     },
-    [connectToPeer]
+    [connectToPeer, connectWithCandidates, emulatorHostConnectUrls]
   );
 
   const startAutoConnect = useCallback(
@@ -710,7 +717,11 @@ export default function TVHomeScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>
             {connectionStage === "connecting"
-              ? `Searching nearby desktop... (${discoveredCount})`
+              ? discoveredCount > 0
+                ? `Searching nearby desktop... (${discoveredCount})`
+                : emulatorHostConnectUrls.length > 0
+                  ? "Searching nearby desktop... Trying emulator host..."
+                  : "Searching nearby desktop... (0)"
               : "No data yet"}
           </Text>
           {catalogError ? <Text style={styles.errorText}>{catalogError}</Text> : null}

@@ -14,6 +14,7 @@ import { Logs } from "lucide-react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useConnectionStore } from "../../stores/connection";
 import { api } from "../../services/api";
+import { getAndroidEmulatorHostConnectUrls } from "../../services/android-emulator";
 import { logger, type AppLogEntry } from "../../services/logger";
 import {
   checkForAndroidApkUpdate,
@@ -204,6 +205,33 @@ export default function TVSettingsScreen() {
     logger.getEntries()
   );
   const [logPage, setLogPage] = useState(0);
+  const emulatorHostConnectUrls = useMemo(
+    () => getAndroidEmulatorHostConnectUrls([DEFAULT_SYNC_PORT, LEGACY_SYNC_PORT]),
+    []
+  );
+  const emulatorHostKey = useMemo(
+    () =>
+      emulatorHostConnectUrls.length > 0
+        ? `emulator:${emulatorHostConnectUrls.join("|")}`
+        : null,
+    [emulatorHostConnectUrls]
+  );
+  const autoConnectCandidateUrls = useMemo(() => {
+    if (singleDiscoveredDevice) {
+      return buildDiscoveredConnectUrls(singleDiscoveredDevice);
+    }
+    if (discoveredDevices.length === 0) {
+      return emulatorHostConnectUrls;
+    }
+    return [];
+  }, [discoveredDevices.length, emulatorHostConnectUrls, singleDiscoveredDevice]);
+  const autoConnectTargetKey = useMemo(
+    () =>
+      singleDiscoveredPeerKey ??
+      (discoveredDevices.length === 0 ? emulatorHostKey : null),
+    [discoveredDevices.length, emulatorHostKey, singleDiscoveredPeerKey]
+  );
+  const autoConnectTargetName = singleDiscoveredDevice?.name ?? "Desktop Host";
 
   const reversedLogs = useMemo(() => [...logEntries].reverse(), [logEntries]);
   const totalLogPages = Math.max(1, Math.ceil(reversedLogs.length / LOG_PAGE_SIZE));
@@ -473,18 +501,18 @@ export default function TVSettingsScreen() {
   }, [clearAutoConnectTimers, scanAttempt]);
 
   useEffect(() => {
-    if (!singleDiscoveredPeerKey) {
+    if (!autoConnectTargetKey) {
       setAutoConnectBlockedPeerKey(null);
       return;
     }
 
     if (
       autoConnectBlockedPeerKey &&
-      autoConnectBlockedPeerKey !== singleDiscoveredPeerKey
+      autoConnectBlockedPeerKey !== autoConnectTargetKey
     ) {
       setAutoConnectBlockedPeerKey(null);
     }
-  }, [autoConnectBlockedPeerKey, singleDiscoveredPeerKey]);
+  }, [autoConnectBlockedPeerKey, autoConnectTargetKey]);
 
   useEffect(() => {
     clearAutoConnectTimers();
@@ -492,20 +520,21 @@ export default function TVSettingsScreen() {
     const isManualTyping = input.trim().length > 0;
     const canAutoConnect =
       !isConnected &&
-      !!singleDiscoveredDevice &&
+      autoConnectCandidateUrls.length > 0 &&
       !isConnecting &&
       !isManualTyping &&
-      autoConnectBlockedPeerKey !== singleDiscoveredPeerKey;
+      autoConnectBlockedPeerKey !== autoConnectTargetKey;
 
-    if (!canAutoConnect || !singleDiscoveredDevice || !singleDiscoveredPeerKey) {
+    if (!canAutoConnect || !autoConnectTargetKey) {
       setAutoConnectCountdown(null);
       return;
     }
 
     let cancelled = false;
     logger.info("[TV Discovery] Auto-connect scheduled", {
-      peer: singleDiscoveredDevice.name,
-      peerKey: singleDiscoveredPeerKey,
+      peer: autoConnectTargetName,
+      peerKey: autoConnectTargetKey,
+      source: singleDiscoveredDevice ? "discovered-peer" : "emulator-host",
       delaySeconds: AUTO_CONNECT_DELAY_SECONDS,
     });
     setAutoConnectCountdown(AUTO_CONNECT_DELAY_SECONDS);
@@ -523,23 +552,30 @@ export default function TVSettingsScreen() {
 
         clearAutoConnectTimers();
         logger.info("[TV Discovery] Auto-connect attempting", {
-          peer: singleDiscoveredDevice.name,
-          peerKey: singleDiscoveredPeerKey,
+          peer: autoConnectTargetName,
+          peerKey: autoConnectTargetKey,
+          source: singleDiscoveredDevice ? "discovered-peer" : "emulator-host",
         });
-        const connected = await connectToDiscoveredDevice(singleDiscoveredDevice, {
-          fromAuto: true,
-        });
+        const connected = await connectWithCandidates(
+          autoConnectCandidateUrls,
+          autoConnectTargetName,
+          {
+            fromAuto: true,
+          }
+        );
 
         if (!connected && !cancelled) {
-          setAutoConnectBlockedPeerKey(singleDiscoveredPeerKey);
+          setAutoConnectBlockedPeerKey(autoConnectTargetKey);
           logger.warn("[TV Discovery] Auto-connect failed; peer blocked for this cycle", {
-            peer: singleDiscoveredDevice.name,
-            peerKey: singleDiscoveredPeerKey,
+            peer: autoConnectTargetName,
+            peerKey: autoConnectTargetKey,
+            source: singleDiscoveredDevice ? "discovered-peer" : "emulator-host",
           });
         } else if (connected && !cancelled) {
           logger.info("[TV Discovery] Auto-connect succeeded", {
-            peer: singleDiscoveredDevice.name,
-            peerKey: singleDiscoveredPeerKey,
+            peer: autoConnectTargetName,
+            peerKey: autoConnectTargetKey,
+            source: singleDiscoveredDevice ? "discovered-peer" : "emulator-host",
           });
         }
 
@@ -555,13 +591,15 @@ export default function TVSettingsScreen() {
     };
   }, [
     autoConnectBlockedPeerKey,
+    autoConnectCandidateUrls,
+    autoConnectTargetKey,
+    autoConnectTargetName,
     clearAutoConnectTimers,
-    connectToDiscoveredDevice,
+    connectWithCandidates,
     input,
     isConnected,
     isConnecting,
     singleDiscoveredDevice,
-    singleDiscoveredPeerKey,
   ]);
 
   const handleCancelAutoConnect = useCallback(() => {
@@ -620,7 +658,9 @@ export default function TVSettingsScreen() {
             <Text style={styles.discoveryHintText}>
               {discoveredDevices.length > 0
                 ? `${discoveredDevices.length} desktop${discoveredDevices.length > 1 ? "s" : ""} found nearby`
-                : "Searching nearby desktop app..."}
+                : emulatorHostConnectUrls.length > 0
+                  ? "Searching nearby desktop app... Trying emulator host too."
+                  : "Searching nearby desktop app..."}
             </Text>
           </View>
         ) : null}
@@ -681,7 +721,7 @@ export default function TVSettingsScreen() {
         <TextInput
           value={input}
           onChangeText={setInput}
-          placeholder="192.168.1.5"
+          placeholder={emulatorHostConnectUrls.length > 0 ? "10.0.2.2" : "192.168.1.5"}
           placeholderTextColor="#64748b"
           style={styles.input}
           autoCapitalize="none"
@@ -700,6 +740,8 @@ export default function TVSettingsScreen() {
 
         {candidates.length > 0 ? (
           <Text style={styles.candidatesText}>{candidates[0]}</Text>
+        ) : emulatorHostConnectUrls.length > 0 ? (
+          <Text style={styles.candidatesText}>Emulator tip: try 10.0.2.2</Text>
         ) : null}
       </View>
 
