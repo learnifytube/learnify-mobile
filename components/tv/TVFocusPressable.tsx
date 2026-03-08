@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { forwardRef, type ComponentRef, useState } from "react";
 import {
   Pressable,
   type PressableProps,
@@ -18,26 +18,32 @@ interface TVFocusPressableProps extends Omit<PressableProps, "style"> {
   style?: FocusableStyle;
   focusedStyle?: StyleProp<ViewStyle>;
   pressedStyle?: StyleProp<ViewStyle>;
+  nextFocusLeft?: number;
+  nextFocusRight?: number;
+  nextFocusUp?: number;
+  nextFocusDown?: number;
 }
+
+export type TVFocusPressableHandle = ComponentRef<typeof Pressable>;
 
 function resolveStyle(style: FocusableStyle | undefined, state: TVFocusState): StyleProp<ViewStyle> {
   if (typeof style === "function") return style(state);
   return style;
 }
 
-export function TVFocusPressable({
-  style,
-  focusedStyle,
-  pressedStyle,
-  onFocus,
-  onBlur,
-  ...props
-}: TVFocusPressableProps) {
+export const TVFocusPressable = forwardRef<
+  TVFocusPressableHandle,
+  TVFocusPressableProps
+>(function TVFocusPressable(
+  { style, focusedStyle, pressedStyle, onFocus, onBlur, ...props },
+  ref
+) {
   const [focused, setFocused] = useState(false);
 
   return (
     <Pressable
       {...props}
+      ref={ref}
       onFocus={(event) => {
         setFocused(true);
         onFocus?.(event);
@@ -56,7 +62,9 @@ export function TVFocusPressable({
       }}
     />
   );
-}
+});
+
+TVFocusPressable.displayName = "TVFocusPressable";
 
 const styles = StyleSheet.create({
   defaultPressed: {

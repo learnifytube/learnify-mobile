@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   DeviceEventEmitter,
@@ -6,6 +6,8 @@ import {
   StyleSheet,
   Text,
   View,
+  findNodeHandle,
+  useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams, type Href } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,16 +18,24 @@ import { api } from "../../../services/api";
 import { getVideoLocalPath } from "../../../services/downloader";
 import {
   TVCard,
-  TV_GRID_CARD_HEIGHT,
-  TV_GRID_CARD_WIDTH,
 } from "../../../components/tv/TVCard";
-import { TVFocusPressable } from "../../../components/tv/TVFocusPressable";
+import {
+  TVFocusPressable,
+  type TVFocusPressableHandle,
+} from "../../../components/tv/TVFocusPressable";
+import {
+  TV_GRID_GAP,
+  TV_GRID_SIDE_PADDING,
+  clampGridFocusIndex,
+  getTVGridCardHeight,
+  getTVGridCardWidth,
+  getTVGridColumns,
+  getTVGridPageSize,
+  isLeftEdgeGridIndex,
+  isRightEdgeGridIndex,
+} from "../../../components/tv/grid";
 import { useLibraryCatalog } from "../../../core/hooks/useLibraryCatalog";
 import type { RemotePlaylist, RemoteVideoWithStatus } from "../../../types";
-
-const GRID_COLUMNS = 4;
-const GRID_ROWS = 2;
-const PAGE_SIZE = GRID_COLUMNS * GRID_ROWS;
 
 type DetailMode = "playlists" | "videos";
 
@@ -85,6 +95,7 @@ function resolveThumbnailUrl(
 }
 
 export default function TVChannelDetailScreen() {
+  const { width: windowWidth } = useWindowDimensions();
   const { id, title } = useLocalSearchParams<{ id: string; title?: string }>();
   const serverUrl = useConnectionStore((state) => state.serverUrl);
   const startPlaylist = usePlaybackStore((state) => state.startPlaylist);
@@ -99,8 +110,26 @@ export default function TVChannelDetailScreen() {
   const [pageOffset, setPageOffset] = useState(0);
   const [focusedGridIndex, setFocusedGridIndex] = useState(0);
   const [isGridFocused, setIsGridFocused] = useState(false);
+  const [cardNodeHandles, setCardNodeHandles] = useState<Array<number | undefined>>(
+    []
+  );
+  const cardRefs = useRef<Array<TVFocusPressableHandle | null>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const gridColumns = useMemo(() => getTVGridColumns(windowWidth), [windowWidth]);
+  const pageSize = useMemo(() => getTVGridPageSize(gridColumns), [gridColumns]);
+  const gridCardWidth = useMemo(
+    () => getTVGridCardWidth(windowWidth, gridColumns),
+    [gridColumns, windowWidth]
+  );
+  const gridCardHeight = useMemo(
+    () => getTVGridCardHeight(gridCardWidth),
+    [gridCardWidth]
+  );
+  const gridCardStyle = useMemo(
+    () => ({ width: gridCardWidth, height: gridCardHeight }),
+    [gridCardHeight, gridCardWidth]
+  );
 
   const localPathByVideoId = useMemo(() => {
     const map = new Map<string, string>();
@@ -229,12 +258,26 @@ export default function TVChannelDetailScreen() {
     }));
   }, [channelPlaylists, channelVideos, detailMode, serverUrl]);
 
-  const maxOffset = Math.max(0, cards.length - PAGE_SIZE);
+  const maxOffset = Math.max(0, cards.length - pageSize);
   const clampedOffset = Math.min(pageOffset, maxOffset);
   const pageItems = useMemo(
-    () => cards.slice(clampedOffset, clampedOffset + PAGE_SIZE),
-    [cards, clampedOffset]
+    () => cards.slice(clampedOffset, clampedOffset + pageSize),
+    [cards, clampedOffset, pageSize]
   );
+
+  useEffect(() => {
+    setCardNodeHandles([]);
+    cardRefs.current = [];
+  }, [clampedOffset, detailMode, pageItems.length]);
+
+  useEffect(() => {
+    setCardNodeHandles(
+      pageItems.map((_, index) => {
+        const node = cardRefs.current[index];
+        return node ? findNodeHandle(node) ?? undefined : undefined;
+      })
+    );
+  }, [pageItems]);
 
   useEffect(() => {
     if (pageOffset !== clampedOffset) {
@@ -265,19 +308,37 @@ export default function TVChannelDetailScreen() {
           return;
         }
 
-        if (event.eventType === "right" && focusedGridIndex === pageItems.length - 1) {
-          const nextOffset = Math.min(clampedOffset + PAGE_SIZE, maxOffset);
+        if (
+          event.eventType === "right" &&
+          isRightEdgeGridIndex(focusedGridIndex, gridColumns, pageItems.length)
+        ) {
+          const nextOffset = Math.min(clampedOffset + 1, maxOffset);
           if (nextOffset !== clampedOffset) {
+            const nextGlobalIndex = Math.min(
+              clampedOffset + focusedGridIndex + 1,
+              cards.length - 1
+            );
+            const nextPageCount = Math.min(pageSize, cards.length - nextOffset);
             setPageOffset(nextOffset);
-            setFocusedGridIndex(0);
+            setFocusedGridIndex(
+              clampGridFocusIndex(nextGlobalIndex, nextOffset, nextPageCount)
+            );
           }
         }
 
-        if (event.eventType === "left" && focusedGridIndex === 0 && clampedOffset > 0) {
-          const nextOffset = Math.max(0, clampedOffset - PAGE_SIZE);
+        if (
+          event.eventType === "left" &&
+          isLeftEdgeGridIndex(focusedGridIndex, gridColumns) &&
+          clampedOffset > 0
+        ) {
+          const nextOffset = Math.max(0, clampedOffset - 1);
           if (nextOffset !== clampedOffset) {
+            const nextGlobalIndex = Math.max(clampedOffset + focusedGridIndex - 1, 0);
+            const nextPageCount = Math.min(pageSize, cards.length - nextOffset);
             setPageOffset(nextOffset);
-            setFocusedGridIndex(PAGE_SIZE - 1);
+            setFocusedGridIndex(
+              clampGridFocusIndex(nextGlobalIndex, nextOffset, nextPageCount)
+            );
           }
         }
       }
@@ -286,7 +347,16 @@ export default function TVChannelDetailScreen() {
     return () => {
       subscription.remove();
     };
-  }, [clampedOffset, focusedGridIndex, isGridFocused, maxOffset, pageItems.length]);
+  }, [
+    cards.length,
+    clampedOffset,
+    focusedGridIndex,
+    gridColumns,
+    isGridFocused,
+    maxOffset,
+    pageItems.length,
+    pageSize,
+  ]);
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
@@ -336,11 +406,24 @@ export default function TVChannelDetailScreen() {
           data={pageItems}
           key={`${detailMode}-${clampedOffset}`}
           keyExtractor={(item) => `${item.type}-${item.id}`}
-          numColumns={GRID_COLUMNS}
+          numColumns={gridColumns}
           scrollEnabled={false}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
           renderItem={({ item, index }) => {
+            const isLeftEdge = isLeftEdgeGridIndex(index, gridColumns);
+            const isRightEdge = isRightEdgeGridIndex(
+              index,
+              gridColumns,
+              pageItems.length
+            );
+            const rightTargetIndex = isRightEdge ? index : index + 1;
+            const leftTargetIndex = isLeftEdge ? index : index - 1;
+            const upTargetIndex = index >= gridColumns ? index - gridColumns : undefined;
+            const downCandidateIndex = index + gridColumns;
+            const downTargetIndex =
+              downCandidateIndex < pageItems.length ? downCandidateIndex : index;
+
             return (
               <TVCard
                 title={item.title}
@@ -358,7 +441,18 @@ export default function TVChannelDetailScreen() {
                     playFromChannelVideos(item.id);
                   }
                 }}
-                style={styles.card}
+                pressableRef={(node) => {
+                  cardRefs.current[index] = node;
+                }}
+                nextFocusLeft={cardNodeHandles[leftTargetIndex]}
+                nextFocusRight={cardNodeHandles[rightTargetIndex]}
+                nextFocusUp={
+                  upTargetIndex === undefined
+                    ? undefined
+                    : cardNodeHandles[upTargetIndex]
+                }
+                nextFocusDown={cardNodeHandles[downTargetIndex]}
+                style={gridCardStyle}
               />
             );
           }}
@@ -372,7 +466,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0f1b3a",
-    paddingHorizontal: 36,
+    paddingHorizontal: TV_GRID_SIDE_PADDING,
     paddingBottom: 24,
   },
   topBar: {
@@ -447,14 +541,10 @@ const styles = StyleSheet.create({
   },
   grid: {
     paddingBottom: 24,
-    gap: 14,
   },
   row: {
-    gap: 14,
-    marginBottom: 14,
-  },
-  card: {
-    width: TV_GRID_CARD_WIDTH,
-    height: TV_GRID_CARD_HEIGHT,
+    justifyContent: "flex-start",
+    gap: TV_GRID_GAP,
+    marginBottom: TV_GRID_GAP,
   },
 });
