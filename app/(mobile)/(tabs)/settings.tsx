@@ -38,6 +38,7 @@ import type { DiscoveredPeer } from "../../../types";
 const DEFAULT_SYNC_PORT = 53318;
 const LEGACY_SYNC_PORT = 8384;
 const DISCOVERY_SCAN_TIMEOUT_MS = 15000;
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 4000;
 const LOG_PAGE_SIZE = 20;
 
 function getErrorMessage(error: unknown): string {
@@ -151,6 +152,10 @@ export default function SettingsScreen() {
   const [scanDebugDetails, setScanDebugDetails] = useState<string | null>(null);
   const [scanAttempt, setScanAttempt] = useState(0);
   const [showManualInput, setShowManualInput] = useState(false);
+  const [manualConnectError, setManualConnectError] = useState<string | null>(null);
+  const [manualConnectDebugDetails, setManualConnectDebugDetails] = useState<string | null>(
+    null
+  );
   const discoveredCountRef = useRef(0);
 
   const selectedLang =
@@ -207,6 +212,8 @@ export default function SettingsScreen() {
     setDiscoveredDevices([]);
     setScanError(null);
     setScanDebugDetails(null);
+    setManualConnectError(null);
+    setManualConnectDebugDetails(null);
     setIsScanning(true);
 
     const stopScanWithError = (message: string, details: string) => {
@@ -361,7 +368,9 @@ export default function SettingsScreen() {
     try {
       for (const url of candidateUrls) {
         try {
-          const info = await api.getInfo(url);
+          const info = await api.getInfo(url, {
+            timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+          });
           assertSyncCompatibility(info);
           setServerUrl(url);
           setServerName(info.name);
@@ -407,10 +416,14 @@ export default function SettingsScreen() {
   const handleManualConnect = async () => {
     if (!ipAddress.trim()) {
       logger.warn("[Mobile Discovery] Manual connect attempted with empty input");
+      setManualConnectError("Please enter an IP address");
+      setManualConnectDebugDetails(null);
       Alert.alert("Error", "Please enter an IP address");
       return;
     }
     setIsConnecting(true);
+    setManualConnectError(null);
+    setManualConnectDebugDetails(null);
     const candidateUrls = buildManualConnectUrls(ipAddress);
     logger.info("[Mobile Discovery] Manual connect requested", {
       input: ipAddress,
@@ -421,7 +434,9 @@ export default function SettingsScreen() {
     try {
       for (const url of candidateUrls) {
         try {
-          const info = await api.getInfo(url);
+          const info = await api.getInfo(url, {
+            timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+          });
           assertSyncCompatibility(info);
           setServerUrl(url);
           setServerName(info.name);
@@ -429,6 +444,8 @@ export default function SettingsScreen() {
             url,
             serverName: info.name,
           });
+          setManualConnectError(null);
+          setManualConnectDebugDetails(null);
           setShowManualInput(false);
           setIpAddress("");
           return;
@@ -453,10 +470,13 @@ export default function SettingsScreen() {
         return;
       }
       const reason = getErrorMessage(error);
+      const debugDetails = `input=${ipAddress}\ntried=${candidateUrls.join(", ")}\nreason=${reason}`;
       logger.error("[Mobile Discovery] Manual connect failed", error, {
         candidateUrls,
         reason,
       });
+      setManualConnectError(`Could not connect to desktop. Last error: ${reason}`);
+      setManualConnectDebugDetails(debugDetails);
       Alert.alert(
         "Connection Failed",
         `Could not connect to desktop.\n\nTried:\n${candidateUrls.join("\n")}\n\nLast error:\n${reason}`
@@ -646,6 +666,8 @@ export default function SettingsScreen() {
                       onPress={() => {
                         setShowManualInput(false);
                         setIpAddress("");
+                        setManualConnectError(null);
+                        setManualConnectDebugDetails(null);
                       }}
                     >
                       <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -666,6 +688,17 @@ export default function SettingsScreen() {
                       )}
                     </Pressable>
                   </View>
+                  {manualConnectError ? (
+                    <View style={styles.manualErrorCard}>
+                      <Text style={styles.manualErrorTitle}>Manual Connection Failed</Text>
+                      <Text style={styles.manualErrorText}>{manualConnectError}</Text>
+                      {manualConnectDebugDetails ? (
+                        <Text style={styles.manualErrorDebug}>
+                          {manualConnectDebugDetails}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               )}
             </>
@@ -1144,6 +1177,31 @@ const styles = StyleSheet.create({
     padding: 16,
     marginHorizontal: 16,
     marginBottom: 8,
+  },
+  manualErrorCard: {
+    marginTop: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(233,69,96,0.45)",
+    backgroundColor: "rgba(233,69,96,0.12)",
+    padding: 12,
+  },
+  manualErrorTitle: {
+    color: "#ff8fa3",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  manualErrorText: {
+    color: "#ffe2e8",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  manualErrorDebug: {
+    color: "#ffccd6",
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 8,
   },
   manualInputLabel: {
     color: "#a0a0a0",

@@ -33,6 +33,7 @@ const DEFAULT_SYNC_PORT = 53318;
 const LEGACY_SYNC_PORT = 8384;
 const AUTO_CONNECT_DELAY_SECONDS = 3;
 const AUTO_CONNECT_DELAY_MS = AUTO_CONNECT_DELAY_SECONDS * 1000;
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 4000;
 const LOG_PAGE_SIZE = 16;
 
 function getAndroidApiLevel(): number {
@@ -262,7 +263,9 @@ export default function TVSettingsScreen() {
         for (const baseUrl of candidateUrls) {
           logger.info("[TV Discovery] Trying endpoint", { baseUrl });
           try {
-            const info = await api.getInfo(baseUrl);
+            const info = await api.getInfo(baseUrl, {
+              timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+            });
             assertSyncCompatibility(info);
 
             setServerUrl(baseUrl);

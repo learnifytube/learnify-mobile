@@ -11,7 +11,8 @@ import type {
   RemoteMyList,
 } from "../types";
 
-const TIMEOUT = 10000;
+const DEFAULT_TIMEOUT = 10000;
+const CONNECTION_INFO_TIMEOUT = 4000;
 
 // Response type for transcripts endpoint
 interface TranscriptsResponse {
@@ -25,7 +26,7 @@ interface TranscriptsResponse {
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeout = TIMEOUT
+  timeout = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -36,14 +37,26 @@ async function fetchWithTimeout(
       signal: controller.signal,
     });
     return response;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeout}ms`);
+    }
+    throw error;
   } finally {
     clearTimeout(id);
   }
 }
 
 export const api = {
-  async getInfo(serverUrl: string): Promise<ServerInfo> {
-    const response = await fetchWithTimeout(`${serverUrl}/api/info`);
+  async getInfo(
+    serverUrl: string,
+    options?: { timeoutMs?: number }
+  ): Promise<ServerInfo> {
+    const response = await fetchWithTimeout(
+      `${serverUrl}/api/info`,
+      {},
+      options?.timeoutMs ?? CONNECTION_INFO_TIMEOUT
+    );
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }

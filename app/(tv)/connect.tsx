@@ -24,6 +24,7 @@ const DEFAULT_SYNC_PORT = 53318;
 const LEGACY_SYNC_PORT = 8384;
 const AUTO_CONNECT_DELAY_SECONDS = 3;
 const AUTO_CONNECT_DELAY_MS = AUTO_CONNECT_DELAY_SECONDS * 1000;
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 4000;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
@@ -158,7 +159,9 @@ export default function TVConnectScreen() {
       try {
         for (const baseUrl of candidateUrls) {
           try {
-            const info = await api.getInfo(baseUrl);
+            const info = await api.getInfo(baseUrl, {
+              timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+            });
             assertSyncCompatibility(info);
             const serverName = info.name ?? fallbackName;
             setServerUrl(baseUrl);

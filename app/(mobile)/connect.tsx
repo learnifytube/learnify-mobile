@@ -27,6 +27,7 @@ import type { RemoteVideo, DiscoveredPeer } from "../../types";
 
 const DEFAULT_SYNC_PORT = 53318;
 const LEGACY_SYNC_PORT = 8384;
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 4000;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -196,7 +197,9 @@ export default function ConnectScreen() {
       for (const url of candidateUrls) {
         try {
           console.log("[Connect] Trying discovered URL:", url);
-          const info = await api.getInfo(url);
+          const info = await api.getInfo(url, {
+            timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+          });
           assertSyncCompatibility(info);
           console.log("[Connect] Connected to:", info.name, "via", url);
 
@@ -251,7 +254,9 @@ export default function ConnectScreen() {
       for (const url of candidateUrls) {
         try {
           console.log("[Connect] Trying manual connection:", url);
-          const info = await api.getInfo(url);
+          const info = await api.getInfo(url, {
+            timeoutMs: CONNECTION_ATTEMPT_TIMEOUT_MS,
+          });
           assertSyncCompatibility(info);
           console.log("[Connect] Connected to:", info.name, "via", url);
 
